@@ -183,6 +183,107 @@ of `self-insert-command' from Normal state"
   :tags '(evil)
   (evil-test-suppress-keymap 'operator))
 
+(defun evil-test-repeat-info (keys &optional recorded)
+  "Executes a sequence of keys and verifies that `evil-repeat-info' records them correctly.
+`keys' is the sequence of keys to execute
+`recorded' is the expected sequence of recorded events, if nil `keys' is used"
+  (execute-kbd-macro keys)
+  (should (equal (vconcat evil-repeat-info)
+                 (vconcat (or recorded keys)))))
+
+(ert-deftest evil-test-normal-repeat-info-simple-command ()
+  "Save key-sequence after simple editing command in vi-state"
+  :tags '(evil)
+  (evil-test-buffer
+    (evil-test-change-state 'normal)
+    (ert-info ("Call simple command without count")
+      (evil-test-repeat-info "x"))
+    (ert-info ("Call simple command with count 3")
+      (evil-test-repeat-info "3x"))))
+
+(ert-deftest evil-test-normal-repeat-info-char-command ()
+  "Save key-sequence after editing command with character in vi-state"
+  :tags '(evil)
+  (evil-test-buffer
+    (evil-test-change-state 'normal)
+    (ert-info ("Call command with character argument without count")
+      (evil-test-repeat-info "r5"))
+    (ert-info ("Call command with character argument with count 12")
+      (evil-test-repeat-info "12rX"))))
+
+(ert-deftest evil-test-insert-repeat-info ()
+  "Save key-sequence after insertion mode"
+  :tags '(evil)
+  (evil-test-buffer
+    (evil-test-change-state 'normal)
+    (ert-info ("Insert text without count")
+      (evil-test-repeat-info (vconcat "iABC" [escape])))
+    (ert-info ("Insert text with count 42")
+      (evil-test-repeat-info (vconcat "42iABC" [escape])))))
+
+(defun evil-test-editing (keys expected &optional point-char)
+  "Execute key-sequence `keys' and verify if the text around point matches
+`expected' afterwards.
+`keys' is a sequence of events to be passed to `execute-kbd-macro'
+`expected' is a regexp with a special character marking (point)'s position
+`point-char' is the special character marking (point)'s position, defaulted to °
+If, e.g., expected is \"ABC°def\" this means the expected text before point is
+\"ABC\" and the expected text after point is \"def\". "
+  (setq point-char (regexp-quote (char-to-string (or point-char ?°))))
+  (string-match point-char expected)
+  (unless (match-beginning 0)
+    (error "No cursor specified in expected string: %s" expected))
+  (let ((before (substring expected 0 (match-beginning 0)))
+        (after (substring expected (match-end 0))))
+    (execute-kbd-macro keys)
+    (ert-info ((format "Text before point is %s"
+                       (buffer-substring (max (point-min)
+                                              (- (point) (length before)))
+                                         (point))))
+      (should (looking-back before)))
+    (ert-info ((format "Text after point is %s"
+                       (buffer-substring (point)
+                                         (min (point-max)
+                                              (+ (point) (length after))))))
+      (should (looking-at after)))))
+
+(defun evil-test-editing-clean (keys expected &optional point-char)
+  "The same as `evil-test-editing' but starts with a new
+unchanged test-buffer in normal-state."
+  (evil-test-buffer
+    (evil-test-change-state 'normal)
+    (evil-test-editing keys expected point-char)))
+
+
+(ert-deftest evil-test-repeat ()
+  "Repeat several editing commands."
+  :tags '(evil)
+  (ert-info ("Repeat insert")
+    (evil-test-editing-clean (vconcat "iABC" [escape] "..") "ABABAB°CCC;; This"))
+
+  (ert-info ("Repeat replace")
+    (evil-test-editing-clean (vconcat "rX" [right right] ".") "\\`X;°XThis"))
+
+  (ert-info ("Repeat replace with count")
+    (evil-test-editing-clean (vconcat "2rX" [right right] ".") "\\`XX X°Xis ")))
+
+(ert-deftest evil-test-cmd-replace-char ()
+  "Calling `evil-replace-char' should replace characters."
+  :tags '(evil)
+  (evil-test-editing-clean "r5" "\\`°5; This")
+  (evil-test-editing-clean "3rX" "\\`XX°XThis"))
+
+(ert-deftest evil-test-insert-before ()
+  "Test insertion of text before point"
+  :tags '(evil)
+  (evil-test-buffer
+    (evil-local-mode 1)
+    (goto-char (+ 3 (point-min)))
+    (should (and (looking-at "This") (looking-back ";; ")))
+    (evil-test-editing  (vconcat "ievil rulz " [escape])
+                        "\\`;; evil rulz° This")))
+
+
 (when evil-tests-run
   (evil-tests-run))
 
