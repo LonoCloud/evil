@@ -361,43 +361,117 @@ bound to some keyboard-macro it is expaned recursively."
 
 ;;; Command properties
 
+(defmacro evil-define-command (command &rest body)
+  "Define a command COMMAND."
+  (declare (indent defun)
+           (debug (&define name
+                           [&optional lambda-list]
+                           [&optional stringp]
+                           [&rest keywordp sexp]
+                           def-body)))
+  (let ((keys (plist-put nil :repeatable t))
+        arg args doc key)
+    ;; collect arguments
+    (when (listp (car-safe body))
+      (setq args (pop body)))
+    ;; collect docstring
+    (when (stringp (car-safe body))
+      (setq doc (pop body)))
+    ;; collect keywords
+    (while (keywordp (car-safe body))
+      (setq key (pop body)
+            arg (pop body))
+      (unless nil ; TODO: add keyword check
+        (plist-put keys key arg)))
+    `(progn
+       (apply 'evil-set-command-properties ',command ',keys)
+       ,@(when body
+           `((defun ,command (,@args)
+               ,@(when doc `(,doc))
+               ,@body)))
+       ',command)))
+
 (defun evil-add-command-properties (command &rest properties)
-  "Adds the evil properties of a COMMAND.
-REST should be a list of an even number of values, the first of a pair considered
-as a key, the second as the value. The properties are stored in an alist at
-the symbol COMMAND's property list entry 'evil-properties."
-  (let ((cmd-properties (get command 'evil-properties)))
-    (when (>= (length properties) 2)
-      (apply #'evil-add-to-alist 'cmd-properties properties))
-    (put command 'evil-properties cmd-properties)))
+  "Add Evil PROPERTIES to COMMAND.
+PROPERTIES should be a list of an even number of values, the
+first of a pair considered as a key, the second as the value.
+They are stored as a plist in the COMMAND symbol's
+`evil-properties' property."
+  (let ((plist (get command 'evil-properties)))
+    (while properties
+      (setq plist (plist-put plist (pop properties) (pop properties))))
+    (put command 'evil-properties plist)))
 
 (defun evil-set-command-properties (command &rest properties)
-  "Sets the evil properties of a COMMAND.
-REST should be a list of an even number of values, the first of a pair considered
-as a key, the second as the value. The properties are stored in an alist at
-the symbol COMMAND's property list entry 'evil-properties."
+  "Set Evil PROPERTIES of COMMAND.
+PROPERTIES should be a list of an even number of values, the
+first of a pair considered as a key, the second as the value.
+They are stored as a plist in the COMMAND symbol's
+`evil-properties' property."
   (put command 'evil-properties nil)
   (apply #'evil-add-command-properties command properties))
 
+;; If no evil-properties are defined for the command, several parts of
+;; Evil apply certain default rules, e.g., the repeat-system decides
+;; whether the command is repeatable by monitoring buffer changes.
 (defun evil-has-properties-p (command)
-  "Returns non-nil if and only if evil-properties are defined for COMMAND.
-If no evil-properties are defined for COMMAND several parts of
-evil apply certain default rules, e.g., the repeat-system decides
-whether the command is repeatable by monitoring buffer changes."
-  (and (get command 'evil-properties) t))
+  "Whether Evil properties are defined for COMMAND."
+  (get command 'evil-properties))
 
-(defun evil-get-command-property (command prop)
-  "Returns the value of evil-property PROP of command COMMAND."
-  (cdr-safe (assq prop (get command 'evil-properties))))
+(defun evil-has-property (command property)
+  "Whether COMMAND has Evil PROPERTY."
+  (plist-member (get command 'evil-properties) property))
+
+(defun evil-get-command-property (command property)
+  "Returns the value of Evil PROPERTY of COMMAND."
+  (plist-get (get command 'evil-properties) property))
 
 (defun evil-repeatable-p (command)
-  "Return non-nil iff COMMAND is repeatable."
-  (evil-get-command-property command 'repeatable))
+  "Whether COMMAND is repeatable."
+  (evil-get-command-property command :repeatable))
 
 (defun evil-keep-visual-p (command)
-  "Return non-nil iff COMMAND should not exit visual state."
-  (evil-get-command-property command 'keep-visual))
+  "Whether COMMAND should not exit Visual state."
+  (evil-get-command-property command :keep-visual))
 
+(dolist (cmd '(backward-char
+               backward-list
+               backward-paragraph
+               backward-sentence
+               backward-sexp
+               backward-up-list
+               backward-word
+               beginning-of-buffer
+               beginning-of-defun
+               beginning-of-line
+               beginning-of-visual-line
+               down-list
+               end-of-buffer
+               end-of-defun
+               end-of-line
+               end-of-visual-line
+               exchange-point-and-mark
+               forward-char
+               forward-list
+               forward-paragraph
+               forward-sentence
+               forward-sexp
+               forward-word
+               keyboard-quit
+               mouse-drag-region
+               mouse-save-then-kill
+               mouse-set-point
+               mouse-set-region
+               move-beginning-of-line
+               move-end-of-line
+               next-line
+               previous-line
+               scroll-down
+               scroll-up
+               undo
+               universal-argument
+               up-list))
+  (evil-set-command-properties cmd :keep-visual t))
 
 ;;; Highlighting
 

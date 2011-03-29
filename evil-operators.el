@@ -40,44 +40,6 @@
     (force-window-update (selected-window))
     (redisplay)))
 
-(defmacro evil-define-command (command &rest body)
-  "Define a command COMMAND."
-  (declare (indent defun)
-           (debug (&define name
-                           [&optional lambda-list]
-                           [&optional stringp]
-                           [&rest keywordp sexp]
-                           def-body)))
-  (let (args
-        doc
-        keyword
-        (keep-visual nil)
-        (repeatable t))
-    ;; collect arguments
-    (when (listp (car body))
-      (setq args (pop body)))
-    ;; collect docstring
-    (when (stringp (car body))
-      (setq doc (pop body)))
-    ;; collect keywords
-    (while (keywordp (car-safe body))
-      (setq keyword (pop body))
-      (cond
-       ((eq keyword :keep-visual)
-        (setq keep-visual (pop body)))
-       ((eq keyword :repeatable)
-        (setq repeatable (pop body)))
-       (t
-        (error "Unknown keyword: %S" (pop body)))))
-    `(progn
-       (evil-set-command-properties
-        ',command 'keep-visual ,keep-visual 'repeatable ,repeatable)
-       ,@(and body
-              `((defun ,command (,@args)
-                  ,@(when doc `(,doc))
-                  ,@body))))))
-
-
 (defmacro evil-define-operator (operator args &rest body)
   "Define an operator command OPERATOR.
 ARGS is the argument list, which must contain at least two
@@ -87,8 +49,11 @@ arguments: the beginning and end of the range."
                            [&optional stringp]
                            [&rest keywordp sexp]
                            def-body)))
-  (let ((repeat t)
-        beg end interactive keep-visual keyword motion type whole-lines)
+  (let ((move-point nil) ; should be t
+        (keep-visual nil)
+        (whole-lines nil)
+        (motion nil)
+        arg beg end interactive key keys type)
     ;; collect BEG, END and TYPE
     (setq args (delq '&optional args)
           beg (or (pop args) 'beg)
@@ -99,37 +64,57 @@ arguments: the beginning and end of the range."
       (setq doc (pop body)))
     ;; collect keywords
     (while (keywordp (car-safe body))
-      (setq keyword (pop body))
+      (setq key (pop body)
+            arg (pop body))
       (cond
-       ((eq keyword :motion)
-        (setq motion (pop body))
+       ((eq key :motion)
+        (setq motion arg)
         (unless motion
           (setq motion 'undefined)))
-       ((eq keyword :keep-visual)
-        (setq keep-visual (pop body)))
-       ((eq keyword :whole-lines)
-        (setq whole-lines (pop body)))
-       ((eq keyword :repeat)
-        (setq repeat (pop body)))
+       ((eq key :keep-visual)
+        (setq keep-visual arg))
+       ((eq key :move-point)
+        (setq move-point arg))
+       ((eq key :whole-lines)
+        (setq whole-lines arg))
        (t
-        (pop body))))
+        (setq keys (append keys (list key arg))))))
     ;; collect `interactive' specification
     (when (eq (car-safe (car-safe body)) 'interactive)
       (setq interactive (cdr (pop body))))
     ;; macro expansion
     `(progn
        (add-to-list 'evil-operators ',operator t)
-       (defun ,operator (,beg ,end &optional ,type ,@args)
+       (evil-define-command ,operator (,beg ,end &optional ,type ,@args)
          ,@(when doc `(,doc))
+         ,@keys
+         :keep-visual t
          (interactive
-          (append (evil-operator-range ',motion ',keep-visual)
-                  ,@interactive))
+          (let* ((range (evil-operator-range ',motion))
+                 (beg (nth 0 range))
+                 (end (nth 1 range))
+                 (type (nth 2 range))
+                 (range (append range (progn ,@interactive)))
+                 (opoint (point)))
+            (if ,keep-visual
+                (when (evil-visual-state-p)
+                  (evil-visual-expand-region))
+              (when (evil-visual-state-p)
+                (evil-normal-state))
+              (when (region-active-p)
+                (evil-active-region -1)))
+            (if ,move-point
+                (if (eq type 'block)
+                    (evil-visual-block-rotate 'upper-left beg end)
+                  (goto-char beg))
+              (goto-char opoint))
+            range))
          (if (and evil-inhibit-operator
                   (evil-called-interactively-p))
              (setq evil-inhibit-operator nil)
            ,@body)))))
 
-(defun evil-operator-range (&optional motion keep-visual)
+(defun evil-operator-range (&optional motion)
   "Read a motion from the keyboard and return its buffer positions.
 The return value is a list (BEG END TYPE), which can be used
 in the `interactive' specification of an operator command."
@@ -138,15 +123,14 @@ in the `interactive' specification of an operator command."
     (evil-save-echo-area
       (cond
        ;; Visual selection
-       ((or (evil-visual-state-p)
-            (region-active-p))
+       ((evil-visual-state-p)
+        (setq beg (evil-visual-beginning)
+              end (evil-visual-end)
+              type (evil-visual-type)))
+       ((region-active-p)
         (setq beg (region-beginning)
-              end (region-end))
-        (unless keep-visual
-          (evil-active-region -1))
-        (if (eq evil-this-type 'block)
-            (evil-visual-block-rotate 'upper-left)
-          (goto-char beg)))
+              end (region-end)
+              type (or evil-this-type 'exclusive)))
        (t
         ;; read motion from keyboard
         (evil-save-state
@@ -327,12 +311,8 @@ Both COUNT and CMD may be nil."
   "ROT13 encrypt text."
   (rot13-region beg end))
 
-
 (evil-define-operator evil-yank (begin end type register)
   "Saves the characters in motion into the kill-ring."
-  ;; TODO: this is a hack as long as the `type' parameter does not
-  ;; work
-  (setq type evil-this-type)
   (cond
    ((eq type 'block)
     (evil-yank-rectangle begin end register))
@@ -350,20 +330,17 @@ Both COUNT and CMD may be nil."
 
 (defun evil-yank-lines (begin end register)
   "Saves the lines in the region BEGIN and END into the kill-ring."
-  (let ((txt (buffer-substring begin end)))
+  (let ((txt (buffer-substring begin end))
+        (yinfo (list #'evil-yank-line-handler)))
     ;; Ensure the text ends with newline.  This is required if the
     ;; deleted lines were the last lines in the buffer.
     (when (or (zerop (length txt))
               (/= (aref txt (1- (length txt))) ?\n))
       (setq txt (concat txt "\n")))
+    (setq txt (propertize txt 'yank-handler yinfo))
     (if register
-        (progn
-          (put-text-property 0 (length txt)
-                             'yank-handler
-                             (list #'evil-yank-line-handler txt)
-                             txt)
-          (set-register register txt))
-      (kill-new txt nil (list #'evil-yank-line-handler txt)))))
+        (set-register register txt)
+      (kill-new txt))))
 
 (defun evil-yank-rectangle (begin end register)
   "Stores the rectangle defined by region BEGIN and END into the kill-ring."
@@ -375,28 +352,27 @@ Both COUNT and CMD may be nil."
     (setq lines (nreverse (cdr lines)))
     ;; txt is used as default insert text when pasting this rectangle
     ;; in another program, e.g., using the X clipboard.
-    (let* ((txt (mapconcat #'identity lines "\n"))
-           (yinfo (list #'evil-yank-block-handler
+    (let* ((yinfo (list #'evil-yank-block-handler
                         lines
                         nil
-                        #'evil-delete-yanked-rectangle)))
+                        #'evil-delete-yanked-rectangle))
+           (txt (propertize (mapconcat #'identity lines "\n") 'yank-handler yinfo)))
       (if register
-          (progn
-            (put-text-property 0 (length txt) 'yank-handler yinfo txt)
-            (set-register register txt))
-        (kill-new txt nil yinfo)))))
+          (set-register register txt)
+        (kill-new txt)))))
 
 (defun evil-yank-line-handler (text)
   "Inserts the current text linewise."
   (let ((text (apply #'concat (make-list (or evil-paste-count 1) text)))
         (opoint (point)))
+    (remove-list-of-text-properties 0 (length text) yank-excluded-properties text)
     (cond
      ((eq this-command 'evil-paste-behind)
       (end-of-line)
       (set-mark (point))
       (newline)
       (insert text)
-      (delete-backward-char 1) ; delete the last newline
+      (delete-char -1) ; delete the last newline
       (setq evil-last-paste
             (list 'evil-paste-behind
                   evil-paste-count
@@ -416,7 +392,6 @@ Both COUNT and CMD may be nil."
                   (point)))))
     (exchange-point-and-mark)
     (evil-first-non-blank)))
-
 
 (defun evil-yank-block-handler (lines)
   "Inserts the current text as block."
@@ -456,6 +431,7 @@ Both COUNT and CMD may be nil."
               (move-to-column (+ col begextra) t)
             (move-to-column col t)
             (insert (make-string begextra ? )))
+          (remove-list-of-text-properties 0 (length txt) yank-excluded-properties txt)
           (insert txt)
           (unless (eolp)
             ;; text follows, so we have to insert spaces
@@ -471,7 +447,6 @@ Both COUNT and CMD may be nil."
     (when (and (eq this-command 'evil-paste-behind)
                (not (eolp)))
       (forward-char))))
-
 
 (defun evil-delete-yanked-rectangle (nrows ncols)
   "Special function to delete the block yanked by a previous paste command."
@@ -582,36 +557,59 @@ is negative this is a more recent kill."
   (interactive "p")
   (evil-paste-pop (- count)))
 
-
 (evil-define-operator evil-delete (beg end type register)
   "Delete and save in kill-ring or REGISTER."
-  ;; TODO: this is a hack as long as the `type' parameter does not
-  ;; work
-  (setq type evil-this-type)
   (evil-yank beg end type register)
-  (if (eq type 'block)
-      (delete-rectangle beg end)
-    (delete-region beg end)))
-
+  (cond
+   ((eq type 'block)
+    (delete-rectangle beg end))
+   ((and (eq type 'line)
+         (= (point-max) end)
+         (/= (point-min) beg))
+    (delete-region (1- beg) end))
+   (t
+    (delete-region beg end))))
 
 (evil-define-operator evil-change (beg end type register)
   "Delete region and change to insert state.
 If the region is linewise insertion starts on an empty line. If
 region is a block, the inserted text in inserted at each line of
 the block."
-  ;; TODO: this is a hack as long as the `type' parameter does not
-  ;; work
   (let ((nlines (1+ (- (line-number-at-pos end)
-                       (line-number-at-pos beg)))))
-    (setq type evil-this-type)
+                       (line-number-at-pos beg))))
+        (at-eob (= (point-max) end)))
     (evil-delete beg end type register)
     (cond
-     ((eq type 'line) (evil-insert-above 1))
+     ((eq type 'line)
+      (if at-eob
+          (evil-insert-below 1)
+        (evil-insert-above 1)))
      ((eq type 'block)
       (evil-insert-before 1 nlines))
      (t
       (evil-insert-before 1)))))
 
+(evil-define-operator evil-join-lines (beg end)
+  "Join lines covered by region (BEG . END) with a minimum of two
+lines."
+  (goto-char beg)
+  (evil-join-successive-lines
+   (1+ (- (line-number-at-pos end)
+          (line-number-at-pos)))))
+
+(defun evil-join-successive-lines (count)
+  "Join COUNT lines with a minimum of two lines."
+  (interactive "p")
+  (join-line 1))
+
+;; TODO: register
+(defun evil-change-chars (count &optional register)
+  "Remove the next COUNT characters and switch to insert-state."
+  (interactive "p")
+  (delete-region (point)
+                 (min (+ (point) count)
+                      (line-end-position)))
+  (evil-insert-before 1))
 
 ;;; Undo
 

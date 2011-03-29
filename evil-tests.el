@@ -352,13 +352,11 @@ suppression keymap comes first")
             evil-motion-state-local nil
             evil-operator-state nil
             evil-operator-state-local nil))
-    (should (eq (key-binding "y") 'undefined))
-    (should (eq (key-binding "u") 'undefined))
-    (should (eq (key-binding "e") 'undefined))
+    (should (eq (key-binding "Q") 'undefined))
     (ert-info ("Don't insert text")
       ;; may or may not signal an error, depending on batch mode
       (condition-case nil
-          (execute-kbd-macro "yue")
+          (execute-kbd-macro "QQQ")
         (error nil))
       (should (string= (buffer-substring 1 4) ";; ")))))
 
@@ -1538,6 +1536,10 @@ to `evil-execute-repeat-info'")
       (evil-test-macro "2dd" 'bobp ";; then enter")
       (evil-test-macro "P" 'bobp ";; This buffer")))
 
+  (ert-info ("Delete last line")
+    (evil-test-buffer
+      (evil-test-macro "Gk2dd" "buffer" "." nil 'eobp)))
+
   (ert-info ("Delete rectangle")
     (evil-test-buffer
       (define-key evil-operator-state-local-map "s" 'evil-test-square-motion)
@@ -1564,6 +1566,11 @@ to `evil-execute-repeat-info'")
       (evil-test-text "ABCLINE\nDEFLIN" "E\n;; then enter" 'bobp)
       (evil-test-macro "p" "DEFLINE\n" ";; This buffer")))
 
+  (ert-info ("Change last line")
+    (evil-test-buffer
+      (execute-kbd-macro (vconcat "Gk2ccABC" [escape]))
+      (evil-test-text "buffer.\nAB" "C" nil 'eobp)))
+
   (ert-info ("Change rectangle")
     (evil-test-buffer
       (define-key evil-operator-state-local-map "s" 'evil-test-square-motion)
@@ -1573,6 +1580,46 @@ to `evil-execute-repeat-info'")
        '(";; AB" "Cyou want" bolp)
        '(";; AB" "Cn enter" bolp)
        '(bolp eolp)))))
+
+(ert-deftest evil-change-word ()
+  "Test change of word."
+  (ert-info ("Non-word")
+    (evil-test-buffer
+      (execute-kbd-macro (vconcat "cwABC" [escape]))
+      (evil-test-text "AB" "C This buffer" 'bobp)))
+  (ert-info ("Word")
+    (evil-test-buffer
+      (execute-kbd-macro (vconcat "wcwABC" [escape]))
+      (evil-test-text ";; AB" "C buffer" 'bobp)))
+  (ert-info ("Single character")
+    (evil-test-buffer
+      (delete-char 1)
+      (execute-kbd-macro (vconcat "cwABC" [escape]))
+      (evil-test-text "AB" "C This buffer" 'bobp))))
+
+(ert-deftest evil-join-lines ()
+  "Test `evil-join-lines'."
+  :tags '(evil)
+  (ert-info ("Simple")
+    (evil-test-buffer-edit "J"
+      "evaluation." " ;; If you"))
+
+  (ert-info ("Visual")
+    (evil-test-buffer-edit "VjJ"
+      "evaluation." " ;; If you")))
+
+(ert-deftest evil-test-change-chars ()
+  "Test `evil-change-chars'."
+  :tags '(evil)
+  (ert-info ("Simple")
+    (evil-test-buffer
+      (execute-kbd-macro (vconcat "5sABC" [escape]))
+      (evil-test-text "AB" "Cis buffer" 'bobp)))
+  (ert-info ("On empty ine")
+    (evil-test-buffer
+      (forward-line 3)
+      (execute-kbd-macro (vconcat "5sABC" [escape]))
+      (evil-test-text "own buffer.\nAB" "C\nBelow"))))
 
 ;;; Motions
 
@@ -2064,6 +2111,108 @@ to `evil-execute-repeat-info'")
       (evil-test-macro "100(" 'bobp "\n\n;; This")
       (should-error (execute-kbd-macro "("))
       (should-error (execute-kbd-macro "42(")))))
+
+(ert-deftest evil-test-find-char ()
+  "Test `evil-find-char'."
+  :tags '(evil)
+  (ert-info ("Simple")
+    (evil-test-buffer-edit "fT" ";; " "This buffer" 'bobp))
+  (ert-info ("With count")
+    (evil-test-buffer-edit "2fe" ";; This buffer is for not" "es you" 'bobp))
+  (ert-info ("Repeat")
+    (evil-test-buffer-edit "fe;" ";; This buffer is for not" "es you" 'bobp))
+  (ert-info ("Repeat backward")
+    (evil-test-buffer-edit "2fe," ";; This buff" "er is for notes you" 'bobp))
+  (ert-info ("End of line")
+    (let (evil-find-skip-newlines)
+      (evil-test-buffer
+        (should-error (execute-kbd-macro "fI"))
+        (evil-test-text 'bobp ";; This")))
+    (let ((evil-find-skip-newlines t))
+      (evil-test-buffer-edit "fI" ";; " "If you" 'bolp))))
+
+(ert-deftest evil-test-find-char-to ()
+  "Test `evil-find-char'."
+  :tags '(evil)
+  (ert-info ("Simple")
+    (evil-test-buffer-edit "tT" ";;" " This buffer" 'bobp))
+  (ert-info ("With count")
+    (evil-test-buffer-edit "2te" ";; This buffer is for no" "tes you" 'bobp))
+  (ert-info ("Repeat")
+    (evil-test-buffer-edit "2te;" ";; This buffer is for no" "tes you" 'bobp)
+    (evil-test-buffer-edit "2te2;" "don't want to sa" "ve, and"))
+  (ert-info ("Repeat backward")
+    (evil-test-buffer-edit "2te," ";; This buffe" "r is for notes you" 'bobp))
+  (ert-info ("End of line")
+    (let (evil-find-skip-newlines)
+      (evil-test-buffer
+        (should-error (execute-kbd-macro "tI"))
+        (evil-test-text 'bobp ";; This")))
+    (let ((evil-find-skip-newlines t))
+      (evil-test-buffer-edit "tI" ";;" " If you" 'bolp))))
+
+(ert-deftest evil-test-find-char-backward ()
+  "Test `evil-find-char'."
+  :tags '(evil)
+  (ert-info ("Simple")
+    (evil-test-buffer-edit "$FT" ";; " "This buffer" 'bobp))
+  (ert-info ("With count")
+    (evil-test-buffer-edit "$2Fe" "to sav" "e, and"))
+  (ert-info ("Repeat")
+    (evil-test-buffer-edit "$Fe;" "to sav" "e, and"))
+  (ert-info ("Repeat backward")
+    (evil-test-buffer-edit "$2Fe," "Lisp " "evaluation." nil 'eolp))
+  (ert-info ("Beginning of line")
+    (let (evil-find-skip-newlines)
+      (evil-test-buffer
+        (should-error (execute-kbd-macro "jwFT"))
+        (evil-test-text ";; " "If you" 'bolp)))
+    (let ((evil-find-skip-newlines t))
+      (evil-test-buffer-edit "jwFT" ";; " "This buffer" 'bobp))))
+
+(ert-deftest evil-test-find-char-to-backward ()
+  "Test `evil-find-char'."
+  :tags '(evil)
+  (ert-info ("Simple")
+    (evil-test-buffer-edit "$TT" ";; T" "his buffer" 'bobp))
+  (ert-info ("With count")
+    (evil-test-buffer-edit "$2Te" "to save" ", and"))
+  (ert-info ("Repeat")
+    (evil-test-buffer-edit "$Te;" "Lisp e" "valuation." nil 'eolp)
+    (evil-test-buffer-edit "$Te2;" "to save" ", and"))
+  (ert-info ("Repeat backward")
+    (evil-test-buffer-edit "$2Te," "Lisp" " evaluation." nil 'eolp))
+  (ert-info ("Beginning of line")
+    (let (evil-find-skip-newlines)
+      (evil-test-buffer
+        (should-error (execute-kbd-macro "jwTT"))
+        (evil-test-text ";; " "If you" 'bolp)))
+    (let ((evil-find-skip-newlines t))
+      (evil-test-buffer-edit "jwTT" ";; T" "his buffer" 'bobp))))
+
+(ert-deftest evil-test-jump-item ()
+  "Test `evil-jump-item'."
+  (ert-info ("Simple")
+    (evil-test-code-buffer
+      (forward-line 3)
+      (re-search-forward "(" nil t)
+      (backward-char)
+      (evil-test-text "main" "(int argc")
+      (evil-test-macro "%" "argv" ")")
+      (evil-test-macro "%" "main" "(int argc")))
+  (ert-info ("Before parenthesis")
+    (evil-test-code-buffer
+      (forward-line 3)
+      (evil-test-macro "%" "argv" ")")
+      (backward-char 5)
+      (evil-test-macro "%" "main" "(int argc")))
+  (ert-info ("Over several lines")
+    (evil-test-code-buffer
+      (forward-line 4)
+      (evil-test-macro "%" "EXIT_SUCCESS;\n     \n" "}" nil 'eolp)))
+  (ert-info ("On line without parenthesis")
+    (evil-test-buffer
+      (should-error (execute-kbd-macro "%")))))
 
 ;;; Visual state
 

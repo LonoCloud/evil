@@ -39,7 +39,9 @@ TARGET the command to call."
 (define-key evil-normal-state-map "x" 'delete-char)
 (define-key evil-normal-state-map "r" 'evil-replace)
 (define-key evil-normal-state-map "R" 'evil-replace-state)
+(define-key evil-normal-state-map "s" 'evil-change-chars)
 (define-key evil-normal-state-map "." 'evil-repeat)
+(define-key evil-normal-state-map "J" 'evil-join-successive-lines)
 
 (define-key evil-normal-state-map "v" 'evil-visual-char)
 (define-key evil-normal-state-map "V" 'evil-visual-line)
@@ -54,6 +56,7 @@ TARGET the command to call."
 (define-key evil-visual-state-map [escape] 'evil-normal-state)
 (define-key evil-visual-state-map "o" 'exchange-point-and-mark)
 (define-key evil-visual-state-map "O" 'evil-visual-exchange-corners)
+(define-key evil-visual-state-map "J" 'evil-join-lines)
 
 ;; "0" is a special command when called first
 (evil-redirect-digit-argument evil-motion-state-map "0" 'evil-beginning-of-line)
@@ -100,14 +103,26 @@ TARGET the command to call."
 (define-key evil-motion-state-map "{" 'evil-backward-paragraph)
 (define-key evil-motion-state-map "}" 'evil-forward-paragraph)
 
+(define-key evil-motion-state-map "%" 'evil-jump-item)
+
+(define-key evil-motion-state-map "f" 'evil-find-char)
+(define-key evil-motion-state-map "t" 'evil-find-char-to)
+(define-key evil-motion-state-map "F" 'evil-find-char-backward)
+(define-key evil-motion-state-map "T" 'evil-find-char-to-backward)
+(define-key evil-motion-state-map ";" 'evil-repeat-find-char)
+(define-key evil-motion-state-map "," 'evil-repeat-find-char-reverse)
+
 (define-key evil-normal-state-map "p" 'evil-paste-behind)
 (define-key evil-normal-state-map "P" 'evil-paste-before)
 (define-key evil-normal-state-map "\C-p" 'evil-paste-pop)
 (define-key evil-normal-state-map "\C-n" 'evil-paste-pop-next)
-(define-key evil-operator-state-map "y" 'evil-yank)
-(define-key evil-operator-state-map "d" 'evil-delete)
-(define-key evil-operator-state-map "c" 'evil-change)
-(define-key evil-operator-state-map "g?" 'evil-rot13)
+(define-key evil-normal-state-map "y" 'evil-yank)
+(define-key evil-normal-state-map "Y" "yy")
+(define-key evil-normal-state-map "d" 'evil-delete)
+(define-key evil-normal-state-map "D" "d$")
+(define-key evil-normal-state-map "c" 'evil-change)
+(define-key evil-normal-state-map "C" "c$")
+(define-key evil-normal-state-map "g?" 'evil-rot13)
 
 (define-key evil-motion-state-map (kbd "C-e") 'evil-scroll-line-down)
 (define-key evil-motion-state-map (kbd "C-d") 'evil-scroll-down)

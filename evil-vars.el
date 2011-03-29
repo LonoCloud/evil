@@ -156,6 +156,10 @@ is not restored.")
 (defvar evil-word "a-zA-Z0-9_"
   "The characters to be considered as a word.")
 
+(defvar evil-last-find nil
+  "A pair (FUNCTION . CHAR) describing the lastest character
+  search command.")
+
 (defvar evil-last-paste nil
   "Information about the latest paste.
 This should be a list (CMD POINT BEG END) where CMD is the last
@@ -192,6 +196,25 @@ They are reused to prevent flicker.")
 (defun evil-version ()
   (interactive)
   (message "Evil version %s" evil-version))
+
+
+;;; Customizations
+
+(defgroup evil nil
+  "A VIM emulation mode."
+  :group 'emulations)
+
+(defcustom evil-show-paren-range
+  0
+  "The minimal distance between point and a parenthesis which
+causes the parenthesis to be highlighted."
+  :type 'integer
+  :group 'evil)
+
+(defcustom evil-find-skip-newlines nil
+  "If non-nil character find motions t,T,f,F skip over newlines."
+  :type 'boolean
+  :group 'evil)
 
 (provide 'evil-vars)
 
