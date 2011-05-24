@@ -46,6 +46,12 @@ which causes the parenthesis to be highlighted."
   :type  'boolean
   :group 'evil)
 
+(defface evil-ex-info '(( ((supports :slant))
+                          :slant italic
+                          :foreground "red"))
+  "Face for the info message in ex mode."
+  :group 'evil)
+
 ;;; Variables
 
 (defvar evil-state nil
@@ -256,6 +262,42 @@ They are reused to prevent flicker.")
 
 (defvar evil-search-prompt nil
   "String to use for search prompt.")
+
+;;; ex-mode
+
+(defvar evil-ex-minibuffer nil
+  "The currently active ex minibuffer.")
+
+(defvar evil-ex-current-buffer nil
+  "The buffer from which the current ex-mode has been started.")
+
+(defvar evil-ex-current-cmd nil
+  "The currently parsed command.")
+
+(defvar evil-ex-current-cmd-begin nil
+  "The begin-position of the currently parsed command.")
+
+(defvar evil-ex-current-cmd-end nil
+  "The end-position of the currently parsed command.")
+
+(defvar evil-ex-current-cmd-force nil
+  "The force argument of the currently parsed command.")
+
+(defvar evil-ex-current-arg nil
+  "The currently parsed argument.")
+
+(defvar evil-ex-history nil
+  "History of ex-commands.")
+
+(defvar evil-ex-keymap (make-sparse-keymap)
+  "Keymap used in ex-mode.")
+
+(defvar evil-ex-commands nil
+  "An alist of command-bindings to functions.")
+
+(defvar evil-ex-update-function nil
+  "Currently active ex update function.")
+
 
 (defconst evil-version "0.1"
   "The current version of Evil")
