@@ -6,6 +6,7 @@
 (require 'evil-insert)
 (require 'evil-operators)
 (require 'evil-replace)
+(require 'evil-ex)
 
 ;;; Normal state
 
@@ -294,6 +295,15 @@
 (define-key minibuffer-local-map "\C-n" 'evil-complete)
 (define-key minibuffer-local-map "\C-x\C-p" 'evil-complete)
 (define-key minibuffer-local-map "\C-x\C-n" 'evil-complete)
+
+
+;; Ex
+(define-key evil-normal-state-map ":" 'evil-ex-read-command)
+(evil-ex-define-cmd "write" 'evil-write)
+(evil-ex-define-cmd "wall" 'evil-write-all)
+(evil-ex-define-cmd "w" "write")
+(evil-ex-define-cmd "substitute" 'evil-substitute)
+(evil-ex-define-cmd "split" 'split-window-horizontally)
 
 (provide 'evil-maps)
 
