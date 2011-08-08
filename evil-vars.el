@@ -228,6 +228,12 @@ which causes the parenthesis to be highlighted."
   :type  '(repeat symbol)
   :group 'evil)
 
+(defface evil-ex-info '(( ((supports :slant))
+                          :slant italic
+                          :foreground "red"))
+  "Face for the info message in ex mode."
+  :group 'evil)
+
 ;;; Variables
 
 (defvar evil-state nil
@@ -481,6 +487,50 @@ They are reused to prevent flicker.")
 
 (defvar evil-window-map (make-sparse-keymap)
   "Keymap for window-related commands.")
+
+;;; ex-mode
+
+(defvar evil-ex-minibuffer nil
+  "The currently active ex minibuffer.")
+
+(defvar evil-ex-current-buffer nil
+  "The buffer from which the current ex-mode has been started.")
+
+(defvar evil-ex-current-cmd nil
+  "The currently parsed command.")
+
+(defvar evil-ex-current-cmd-begin nil
+  "The begin-position of the currently parsed command.")
+
+(defvar evil-ex-current-cmd-end nil
+  "The end-position of the currently parsed command.")
+
+(defvar evil-ex-current-cmd-force nil
+  "The force argument of the currently parsed command.")
+
+(defvar evil-ex-current-arg nil
+  "The currently parsed argument.")
+
+(defvar evil-ex-current-range nil
+  "The currenty parsed range.")
+
+(defvar evil-ex-history nil
+  "History of ex-commands.")
+
+(defvar evil-ex-keymap (make-sparse-keymap)
+  "Keymap used in ex-mode.")
+(set-keymap-parent evil-ex-keymap minibuffer-local-completion-map)
+(define-key evil-ex-keymap (kbd "SPC") #'self-insert-command)
+
+(defvar evil-ex-commands nil
+  "An alist of command-bindings to functions.")
+
+(defvar evil-ex-current-arg-handler nil
+  "Currently active argument handler depending on current command.")
+
+(defvar evil-ex-arg-types-alist nil
+  "An alist of defined argument handlers.")
+
 
 (defconst evil-version "0.1"
   "The current version of Evil")
