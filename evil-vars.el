@@ -1,5 +1,25 @@
 ;;;; Settings and variables
 
+;;; Setters
+
+(defun evil-set-toggle-key (key)
+  "Set `evil-toggle-key' to KEY.
+KEY must be readable by `read-kbd-macro'."
+  (let ((old-key (read-kbd-macro (if (boundp 'evil-toggle-key)
+                                     evil-toggle-key
+                                   "C-z")))
+        (key (read-kbd-macro key)))
+    (when (and (boundp 'evil-motion-state-map)
+               (keymapp evil-motion-state-map))
+      (define-key evil-motion-state-map key 'evil-emacs-state)
+      (define-key evil-motion-state-map old-key nil))
+    (when (and (boundp 'evil-emacs-state-map)
+               (keymapp evil-emacs-state-map))
+      (define-key evil-emacs-state-map key 'evil-exit-emacs-state)
+      (define-key evil-emacs-state-map old-key nil))))
+
+;;; Customization group
+
 (defgroup evil nil
   "Extensible vi layer."
   :group 'emulations
@@ -94,6 +114,25 @@ which causes the parenthesis to be highlighted."
   :type 'boolean
   :group 'evil)
 
+(defcustom evil-toggle-key "C-z"
+  "The key used to change to and from Emacs state.
+Must be readable by `read-kbd-macro'. For example: \"C-z\"."
+  :type 'string
+  :group 'evil
+  :set (lambda (sym value)
+         (evil-set-toggle-key value)
+         (set-default sym value)))
+
+(defcustom evil-default-state 'normal
+  "The default state.
+This is the state a mode comes up in when it is not listed
+in `evil-emacs-state-modes', `evil-insert-state-modes' or
+`evil-motion-state-modes'. The value may be one of `normal',
+`insert', `visual', `replace', `operator', `motion' and
+`emacs'."
+  :type  'symbol
+  :group 'evil)
+
 (defcustom evil-emacs-state-modes
   '(bookmark-bmenu-mode
     bookmark-edit-annotation-mode
@@ -155,7 +194,6 @@ which causes the parenthesis to be highlighted."
     beginning-of-visual-line
     c-beginning-of-defun
     c-end-of-defun
-    c-mark-function
     digit-argument
     down-list
     end-of-buffer
@@ -198,13 +236,6 @@ which causes the parenthesis to be highlighted."
     isearch-yank-line
     isearch-yank-word-or-char
     keyboard-quit
-    mark-defun
-    mark-end-of-sentence
-    mark-page
-    mark-paragraph
-    mark-sexp
-    mark-whole-buffer
-    mark-word
     mouse-drag-region
     mouse-save-then-kill
     mouse-set-point

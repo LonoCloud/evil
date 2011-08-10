@@ -1,23 +1,26 @@
 SHELL = /bin/bash
 EMACS = emacs
-FILES = evil*.el
+FILES = $(filter-out evil-tests.el,$(filter-out evil-pkg.el,$(wildcard evil*.el)))
+ELPAPKG = evil-`sed -n '3s/.*"\(.*\)".*/\1/p' evil-pkg.el`
 TAG =
 
-.PHONY: all compile compile-batch clean tests test emacs term terminal indent
+ELCFILES = $(FILES:.el=.elc)
+
+.PHONY: all compile compile-batch clean tests test emacs term terminal indent elpa version
 
 # Byte-compile Evil.
 all: compile
-compile: clean
-	for f in ${FILES}; do \
-  $(EMACS) --batch -Q -L . -f batch-byte-compile $$f; \
-done
+compile: $(ELCFILES)
+
+$(ELCFILES): %.elc: %.el
+	$(EMACS) --batch -Q -L . -L lib -f batch-byte-compile $<
 
 # Byte-compile all files in one batch. This is faster than
 # compiling each file in isolation, but also less stringent.
 compile-batch: clean
-	$(EMACS) --batch -Q -L . -f batch-byte-compile ${FILES}
+	$(EMACS) --batch -Q -L . -L lib -f batch-byte-compile ${FILES}
 
-# Delete byte-compiled files.
+# Delete byte-compiled files etc.
 clean:
 	rm -f *~
 	rm -f \#*\#
@@ -28,26 +31,26 @@ clean:
 #       make test TAG=repeat
 # This will only run tests pertaining to the repeat system.
 test: clean
-	$(EMACS) --batch -Q -L . -l evil-tests.el \
+	$(EMACS) --batch -Q -L . -L lib -l evil-tests.el \
 --eval "(evil-tests-run '(${TAG}))"
 
 # Byte-compile Evil and run all tests.
 tests: compile-batch
-	$(EMACS) --batch -Q -L . -l evil-tests.el \
+	$(EMACS) --batch -Q -L . -L lib -l evil-tests.el \
 --eval "(evil-tests-run '(${TAG}))"
 	rm -f *.elc
 
 # Load Evil in a fresh instance of Emacs and run all tests.
-emacs: clean
-	$(EMACS) -Q -L . -l evil-tests.el --eval "(evil-mode 1)" \
+emacs:
+	$(EMACS) -Q -L . -L lib -l evil-tests.el --eval "(evil-mode 1)" \
 --eval "(if (y-or-n-p-with-timeout \"Run tests? \" 2 t) \
 (evil-tests-run '(${TAG}) t) \
 (message \"You can run the tests at any time with \`M-x evil-tests-run\'\"))" &
 
 # Load Evil in a terminal Emacs and run all tests.
 term: terminal
-terminal: clean
-	$(EMACS) -nw -Q -L . -l evil-tests.el --eval "(evil-mode 1)" \
+terminal:
+	$(EMACS) -nw -Q -L . -L lib -l evil-tests.el --eval "(evil-mode 1)" \
 --eval "(if (y-or-n-p-with-timeout \"Run tests? \" 2 t) \
 (evil-tests-run '(${TAG}) t) \
 (message \"You can run the tests at any time with \`M-x evil-tests-run\'\"))"
@@ -56,7 +59,7 @@ terminal: clean
 # Loads Evil into memory in order to indent macros properly.
 # Also removes trailing whitespace, tabs and extraneous blank lines.
 indent: clean
-	$(EMACS) --batch ${FILES} -Q -L . -l evil-tests.el \
+	$(EMACS) --batch ${FILES} -Q -L . -L lib -l evil-tests.el \
 --eval "(dolist (buffer (reverse (buffer-list))) \
 (when (buffer-file-name buffer) \
 (set-buffer buffer) \
@@ -70,3 +73,16 @@ indent: clean
 (while (re-search-forward \"\\n\\\\{3,\\\\}\" nil t) \
 (replace-match \"\\n\\n\")) \
 (when (buffer-modified-p) (save-buffer 0))))"
+
+# Create an ELPA package.
+elpa:
+	rm -rf ${ELPAPKG}
+	mkdir ${ELPAPKG}
+	cp $(FILES) evil-pkg.el ${ELPAPKG}
+	tar cf ${ELPAPKG}.tar ${ELPAPKG}
+	rm -rf ${ELPAPKG}
+
+# Change the version using make VERSION=x.y.z
+version:
+	cat evil-pkg.el | sed "3s/\".*\"/\"${VERSION}\"/" > evil-pkg.el
+
