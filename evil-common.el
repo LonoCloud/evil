@@ -2,22 +2,34 @@
 
 (require 'evil-vars)
 (require 'evil-compatibility)
+(require 'evil-interactive)
+
+;;; Macro helpers
+
+(eval-and-compile
+  (defun evil-unquote (exp)
+    "Return EXP unquoted."
+    (while (eq (car-safe exp) 'quote)
+      (setq exp (cadr exp)))
+    exp))
 
 ;;; List functions
 
-(defun evil-add-to-alist (list-var key val &rest elements)
-  "Add the assocation of KEY and VAL to the value of LIST-VAR.
+(eval-and-compile
+  (defun evil-add-to-alist (list-var key val &rest elements)
+    "Add the assocation of KEY and VAL to the value of LIST-VAR.
 If the list already contains an entry for KEY, update that entry;
 otherwise add at the end of the list."
-  (let ((tail (symbol-value list-var)))
-    (while (and tail (not (equal (car-safe (car-safe tail)) key)))
-      (setq tail (cdr tail)))
-    (if tail
-        (setcar tail (cons key val))
-      (add-to-list list-var (cons key val) t))
-    (if elements
-        (apply 'evil-add-to-alist list-var elements)
-      (symbol-value list-var))))
+    (let ((tail (symbol-value list-var)))
+      (while (and tail (not (equal (car-safe (car-safe tail)) key)))
+        (setq tail (cdr tail)))
+      (if tail
+          (setcar tail (cons key val))
+        (set list-var (append (symbol-value list-var)
+                              (list (cons key val)))))
+      (if elements
+          (apply 'evil-add-to-alist list-var elements)
+        (symbol-value list-var)))))
 
 ;; custom version of `delete-if'
 (defun evil-filter-list (predicate list &optional pointer)
@@ -40,75 +52,88 @@ changing the value of `foo'."
               tail (cdr tail)))))
     list))
 
+(defun evil-member-if (predicate list &optional pointer)
+  "Find the first item satisfying PREDICATE in LIST.
+Stop when reaching POINTER, which should point at a link
+in the list."
+  (let (elt)
+    (catch 'done
+      (while (and (consp list) (not (eq list pointer)))
+        (setq elt (car list))
+        (if (funcall predicate elt)
+            (throw 'done elt)
+          (setq list (cdr list)))))))
+
 (defun evil-concat-lists (&rest sequences)
   "Concatenate lists, removing duplicates.
-The first occurrence is retained.
-To concatenate association lists, see `evil-concat-alists'."
-  (let ((first (pop sequences))
-        (tail (copy-sequence (pop sequences)))
-        result)
-    ;; remove internal duplicates
-    (dolist (elt first)
-      (add-to-list 'result elt t 'eq))
-    ;; remove tail duplicates
-    (catch 'empty
-      (dolist (elt result)
-        (if tail
-            (setq tail (delq elt tail))
-          (throw 'empty t))))
-    (setq result (append result tail))
-    (if sequences
-        (apply 'evil-concat-lists result sequences)
-      result)))
+Elements are compared with `eq'."
+  (let (result)
+    (dolist (sequence sequences)
+      (dolist (elt sequence)
+        (add-to-list 'result elt nil 'eq)))
+    (nreverse result)))
 
 (defun evil-concat-alists (&rest sequences)
   "Concatenate association lists, removing duplicates.
-The first association is retained.
-To concatenate regular lists, see `evil-concat-lists'."
-  (let ((first (pop sequences))
-        (tail (copy-sequence (pop sequences)))
-        result)
-    ;; remove internal duplicates
-    (dolist (elt first)
-      (unless (assq (car-safe elt) result)
-        (add-to-list 'result elt t 'eq)))
-    ;; remove tail duplicates
-    (catch 'empty
-      (dolist (elt result)
-        (if tail
-            (setq tail (assq-delete-all (car-safe elt) tail))
-          (throw 'empty t))))
-    (setq result (append result tail))
-    (if sequences
-        (apply 'evil-concat-lists result sequences)
-      result)))
+An alist is a list of cons cells (KEY . VALUE) where each key
+may occur only once. Later values overwrite earlier values."
+  (let (result)
+    (dolist (sequence sequences)
+      (dolist (elt sequence)
+        (setq result (assq-delete-all (car-safe elt) result))
+        (push elt result)))
+    (nreverse result)))
+
+(defun evil-concat-plists (&rest sequences)
+  "Concatenate property lists, removing duplicates.
+A property list is a list (:KEYWORD1 VALUE1 :KEYWORD2 VALUE2...)
+where each keyword may occur only once. Later values overwrite
+earlier values."
+  (let (result)
+    (dolist (sequence sequences result)
+      (while sequence
+        (setq result
+              (plist-put result (pop sequence) (pop sequence)))))))
+
+(defun evil-concat-keymap-alists (&rest sequences)
+  "Concatenate keymap association lists, removing duplicates.
+A keymap alist is a list of cons cells (VAR . MAP) where each keymap
+may occur only once, but where the variables may be repeated
+\(e.g., (VAR . MAP1) (VAR . MAP2) is allowed). The order matters,
+with the highest priority keymaps being listed first."
+  (let (result)
+    (dolist (sequence sequences)
+      (dolist (elt sequence)
+        (unless (rassq (cdr-safe elt) result)
+          (push elt result))))
+    (nreverse result)))
 
 (defun evil-get-property (alist key &optional prop)
   "Return property PROP for KEY in ALIST.
-ALIST is an association list with entries in the form
+ALIST is an association list with entries of the form
 \(KEY . PLIST), where PLIST is a property list.
 If PROP is nil, return all properties for KEY.
-If KEY is nil, return an association list of states
+If KEY is t, return an association list of keys
 and their PROP values."
   (unless (or (keywordp prop) (null prop))
     (setq prop (intern (format ":%s" prop))))
   (cond
-   ((and key prop)
-    (plist-get (cdr (assq key alist)) prop))
-   (key ; PROP is nil
+   ((null prop)
     (cdr (assq key alist)))
-   (prop ; KEY is nil
+   ((eq key t)
     (let (result val)
       (dolist (entry alist result)
         (setq key (car entry)
               val (cdr entry))
         (when (plist-member val prop)
           (setq val (plist-get val prop))
-          (add-to-list 'result (cons key val) t)))))))
+          (push (cons key val) result)))))
+   (t
+    (plist-get (cdr (assq key alist)) prop))))
 
 (defun evil-put-property (alist-var key prop val &rest properties)
   "Set PROP to VAL for KEY in ALIST-VAR.
-ALIST-VAR points to an association list with entries in the form
+ALIST-VAR points to an association list with entries of the form
 \(KEY . PLIST), where PLIST is a property list storing PROP and VAL."
   (set alist-var
        (let* ((alist (symbol-value alist-var))
@@ -120,7 +145,18 @@ ALIST-VAR points to an association list with entries in the form
                  prop (pop properties)
                  val (pop properties)))
          (setq alist (assq-delete-all key alist))
-         (add-to-list 'alist (cons key plist) t))))
+         (push (cons key plist) alist))))
+
+(defun evil-state-property (state prop &optional value)
+  "Return the value of property PROP for STATE.
+PROP is a keyword as used by `evil-define-state'.
+STATE is the state's symbolic name.
+If VALUE is non-nil and the value is a variable,
+return the value of that variable."
+  (let ((val (evil-get-property evil-state-properties state prop)))
+    (if (and value (symbolp val) (boundp val))
+        (symbol-value val)
+      val)))
 
 (defmacro evil-swap (this that &rest vars)
   "Swap the values of variables THIS and THAT.
@@ -178,7 +214,9 @@ RESULT specifies a variable for storing this value.
 Intermittent messages are not logged in the *Messages* buffer."
   (declare (indent defun)
            (debug t))
-  `(let (evil-echo-area-message evil-write-echo-area)
+  `(let ((inhibit-quit t)
+         evil-echo-area-message
+         evil-write-echo-area)
      (unwind-protect
          (progn
            (evil-echo-area-save)
@@ -209,7 +247,7 @@ That is, the message is not logged in the *Messages* buffer.
 
 (defmacro evil-with-locked-display (&rest body)
   "Execute BODY with locked display.
-State changes will not change the cursor, refresh the modeline
+State changes will not change the cursor, refresh the mode line
 or display a message in the echo area."
   (declare (indent defun)
            (debug t))
@@ -223,7 +261,8 @@ or display a message in the echo area."
   `(let* ((evil-state evil-state)
           (evil-previous-state evil-previous-state)
           (evil-next-state evil-next-state)
-          (old-state evil-state))
+          (old-state evil-state)
+          (inhibit-quit t))
      (unwind-protect
          (progn ,@body)
        (evil-change-state old-state))))
@@ -238,15 +277,31 @@ Restore the previous state afterwards."
        (evil-change-state ',state)
        ,@body)))
 
+(defun evil-refresh-cursor (&optional state buffer)
+  "Refresh the cursor for STATE in BUFFER.
+STATE defaults to the current state.
+BUFFER defaults to the current buffer."
+  (let* ((state (or state evil-state 'normal))
+         (default (or evil-default-cursor t))
+         (cursor (evil-state-property state :cursor t))
+         (color (or (and (stringp cursor) cursor)
+                    (and (listp cursor)
+                         (evil-member-if 'stringp cursor)))))
+    (with-current-buffer (or buffer (current-buffer))
+      ;; if both STATE and `evil-default-cursor'
+      ;; specify a color, don't set it twice
+      (when (and color (listp default))
+        (setq default (evil-filter-list 'stringp default)))
+      (evil-set-cursor default)
+      (evil-set-cursor cursor))))
+
 (defun evil-set-cursor (specs)
   "Change the cursor's apperance according to SPECS.
 SPECS may be a cursor type as per `cursor-type', a color
 string as passed to `set-cursor-color', a zero-argument
-function for changing the cursor, or a list of the above.
-If SPECS is nil, make the cursor a black filled box."
-  (setq cursor-type t)
-  (evil-set-cursor-color "black")
-  (unless (and (listp specs) (not (consp specs)))
+function for changing the cursor, or a list of the above."
+  (unless (and (listp specs)
+               (null (cdr-safe (last specs))))
     (setq specs (list specs)))
   (dolist (spec specs)
     (cond
@@ -271,7 +326,8 @@ If SPECS is nil, make the cursor a black filled box."
   (declare (indent defun)
            (debug t))
   `(let ((cursor cursor-type)
-         (color (frame-parameter (selected-frame) 'cursor-color)))
+         (color (frame-parameter (selected-frame) 'cursor-color))
+         (inhibit-quit t))
      (unwind-protect
          (progn ,@body)
        (evil-set-cursor cursor)
@@ -293,7 +349,7 @@ is non-nil) and returns point."
   "Set the prompt-string of MAP to PROMPT."
   (delq (keymap-prompt map) map)
   (when prompt
-    (setcdr map (append (list prompt) (cdr map)))))
+    (setcdr map (cons prompt (cdr map)))))
 
 ;;; Markers
 
@@ -377,12 +433,56 @@ or a marker object pointing nowhere."
       (setq evil-jump-list nil)
       (push-mark pos))))
 
-(defun evil-get-register (register)
+(defun evil-get-register (register &optional noerror)
   "Return contents of REGISTER.
-Signal an error if empty."
+Signal an error if empty, unless NOERROR is non-nil."
   (when (characterp register)
-    (or (get-register register)
-        (error "Register `%c' is empty" register))))
+    (or (cond
+         ((eq register ?\")
+          (current-kill 0))
+         ((and (<= ?0 register) (<= register ?9))
+          (current-kill (- register ?0) t))
+         ((eq register ?*)
+          (let ((x-select-enable-primary t))
+            (current-kill 0)))
+         ((eq register ?+)
+          (let ((x-select-enable-clipboard t))
+            (current-kill 0)))
+         (t
+          (get-register register)))
+        (unless noerror
+          (error "Register `%c' is empty" register)))))
+
+(defun evil-set-register (register text)
+  "Set the contents of register REGISTER to TEXT."
+  (cond
+   ((eq register ?\")
+    (kill-new text))
+   ((and (<= ?0 register) (<= register ?9))
+    (if (null kill-ring)
+        (kill-new text)
+      (let ((kill-ring-yank-pointer kill-ring-yank-pointer)
+            interprogram-paste-function
+            interprogram-cut-function)
+        (current-kill (- register ?0))
+        (setcar kill-ring-yank-pointer text))))
+   ((eq register ?*)
+    (let ((x-select-enable-primary t))
+      (kill-new text)))
+   ((eq register ?+)
+    (let ((x-select-enable-clipboard t))
+      (kill-new text)))
+   (t
+    (set-register register text))))
+
+;; custom version of `gensym'
+(defun evil-generate-symbol (&optional intern)
+  "Return a new uninterned symbol.
+If INTERN is non-nil, intern the symbol."
+  (setq evil-symbol-counter (1+ evil-symbol-counter))
+  (if intern
+      (intern (format "evil-symbol-%d" evil-symbol-counter))
+    (make-symbol (format "evil-symbol-%d" evil-symbol-counter))))
 
 ;;; Key sequences
 
@@ -428,9 +528,19 @@ recursively."
                            (substring keys beg end)
                            (when (< end len)
                              (substring keys end))))))
-           (t ;; append a further event
+           (t ; append a further event
             (setq end (1+ end))))))
       (error "Key sequence contains no complete binding"))))
+
+(defun evil-mouse-events-p (keys)
+  "Returns non-nil iff KEYS contains a mouse event."
+  (catch 'done
+    (dotimes (i (length keys))
+      (when (or (and (fboundp 'mouse-event-p)
+                     (mouse-event-p (aref keys i)))
+                (mouse-movement-p (aref keys i)))
+        (throw 'done t)))
+    nil))
 
 ;;; Command properties
 
@@ -443,7 +553,7 @@ recursively."
                            [&optional lambda-list]
                            [&optional stringp]
                            [&rest keywordp sexp]
-                           [&optional ("interactive" interactive)]
+                           [&optional ("interactive" [&rest form])]
                            def-body)))
   (let ((keys (plist-put nil :repeat t))
         arg args doc doc-form key)
@@ -462,6 +572,23 @@ recursively."
             arg (pop body))
       (unless nil ; TODO: add keyword check
         (plist-put keys key arg)))
+    ;; collect interactive
+    (when (and body
+               (consp (car body))
+               (eq (car (car body)) 'interactive))
+      (let* ((interactive (pop body))
+             (result (apply #'evil-interactive-form (cdr interactive)))
+             (form (car result))
+             (attrs (cdr result)))
+        (push (list 'interactive form) body)
+        ;; The next code is a copy of the previous one but does not
+        ;; overwrite properties.
+        (while (keywordp (car-safe attrs))
+          (setq key (pop attrs)
+                arg (pop attrs))
+          (unless (or nil ; TODO: add keyword check
+                      (plist-member keys key))
+            (plist-put keys key arg)))))
     `(progn
        ;; the compiler does not recognize `defun' inside `let'
        ,(when (and command body)
@@ -543,6 +670,31 @@ MOTION defaults to the current motion."
   (setq motion (or motion evil-this-motion))
   (evil-get-command-property motion :yank-handler))
 
+(defun evil-declare-motion (command)
+  "Declare COMMAND to be a movement function.
+This ensures that it behaves correctly in Visual state."
+  (evil-add-command-properties command :keep-visual t :repeat 'motion))
+
+(defun evil-declare-repeat (command)
+  "Declare COMMAND to be repeatable."
+  (evil-add-command-properties command :repeat t))
+
+(defun evil-declare-not-repeat (command)
+  "Declare COMMAND to be nonrepeatable."
+  (evil-add-command-properties command :repeat nil))
+
+(defun evil-declare-ignore-repeat (command)
+  "Declare COMMAND to be nonrepeatable."
+  (evil-add-command-properties command :repeat 'ignore))
+
+(defun evil-declare-change-repeat (command)
+  "Declare COMMAND to be repeatable by buffer changes."
+  (evil-add-command-properties command :repeat 'change))
+
+(defun evil-declare-abort-repeat (command)
+  "Declare COMMAND to be nonrepeatable."
+  (evil-add-command-properties command :repeat 'abort))
+
 ;;; Region
 
 (defun evil-transient-save ()
@@ -552,9 +704,9 @@ Their values are stored in `evil-transient-vals'."
   (dolist (var evil-transient-vars)
     (when (and (boundp var)
                (not (assq var evil-transient-vals)))
-      (add-to-list 'evil-transient-vals
-                   (list var (symbol-value var)
-                         (and (assq var (buffer-local-variables)) t)))
+      (push (list var (symbol-value var)
+                  (and (assq var (buffer-local-variables)) t))
+            evil-transient-vals)
       (make-variable-buffer-local var))))
 
 (defun evil-transient-restore ()
@@ -621,7 +773,8 @@ Enable with positive ARG, disable with negative ARG."
   "Save Transient Mark mode; execute BODY; then restore it."
   (declare (indent defun)
            (debug t))
-  `(let (evil-transient-vals)
+  `(let ((inhibit-quit t)
+         evil-transient-vals)
      (unwind-protect
          (progn
            (evil-transient-save)
@@ -640,7 +793,8 @@ Execute BODY, then restore those things."
 (defun evil-normalize-position (pos)
   "Return POS if it does not exceed the buffer boundaries.
 If POS is less than `point-min', return `point-min'.
-Is POS is more than `point-max', return `point-max'."
+Is POS is more than `point-max', return `point-max'.
+If POS is a marker, return its position."
   (cond
    ((not (number-or-marker-p pos))
     pos)
@@ -648,6 +802,8 @@ Is POS is more than `point-max', return `point-max'."
     (point-min))
    ((> pos (point-max))
     (point-max))
+   ((markerp pos)
+    (marker-position pos))
    (t
     pos)))
 
@@ -669,10 +825,13 @@ If POS is nil, delete the mark."
     (set-marker (mark-marker) point)
     (goto-char mark)))
 
-(defun evil-adjust-eol ()
-  "Move (point) one character back if at eol on an non-empty line."
-  (when (eolp)
-    (evil-adjust)))
+(defun evil-adjust-eol (&optional force)
+  "Move point one character back if at the end of a non-empty line.
+This behavior is contingent on `evil-move-cursor-back';
+use the FORCE parameter to override it."
+  (when (or evil-move-cursor-back force)
+    (when (eolp)
+      (evil-adjust))))
 
 (defun evil-adjust ()
   "Move point one character back within the current line."
@@ -728,10 +887,23 @@ each line. Extra arguments to FUNC may be passed via ARGS."
 (defun evil-in-comment-p (&optional pos)
   "Whether POS is inside a comment.
 POS defaults to the current position of point."
-  (setq pos (or pos (point)))
-  (and (nth 4 (parse-partial-sexp
-               (save-excursion (beginning-of-defun) (point))
-               pos)) t))
+  (let ((parse (lambda (p)
+                 (let ((c (char-after p)))
+                   (or (and c (eq (char-syntax c) ?<))
+                       (nth 4 (parse-partial-sexp
+                               (save-excursion
+                                 (beginning-of-defun)
+                                 (point)) p)))))))
+    (save-excursion
+      (goto-char (or pos (point)))
+      (or (funcall parse (point))
+          ;; `parse-partial-sexp's notion of comments
+          ;; doesn't span lines
+          (progn
+            (back-to-indentation)
+            (unless (eolp)
+              (forward-char)
+              (funcall parse (point))))))))
 
 (defun evil-in-string-p (&optional pos)
   "Whether POS is inside a string.
@@ -744,22 +916,24 @@ POS defaults to the current position of point."
 (defun evil-comment-beginning (&optional pos)
   "Return beginning of comment containing POS.
 POS defaults to the current position of point."
-  (save-excursion
-    (goto-char (or pos (point)))
-    (when (evil-in-comment-p)
-      (while (and (evil-in-comment-p) (not (bobp)))
-        (backward-char))
-      (point))))
+  (setq pos (or pos (point)))
+  (when (evil-in-comment-p pos)
+    (while (let ((next (1+ pos)))
+             (when (and (<= next (buffer-end 1))
+                        (evil-in-comment-p next))
+               (setq pos next))))
+    pos))
 
 (defun evil-comment-end (&optional pos)
   "Return end of comment containing POS.
 POS defaults to the current position of point."
-  (save-excursion
-    (goto-char (or pos (point)))
-    (when (evil-in-comment-p)
-      (while (and (evil-in-comment-p) (not (eobp)))
-        (forward-char))
-      (point))))
+  (setq pos (or pos (point)))
+  (when (evil-in-comment-p pos)
+    (while (let ((prev (1- pos)))
+             (when (and (>= prev (buffer-end -1))
+                        (evil-in-comment-p prev))
+               (setq pos prev))))
+    pos))
 
 (defun evil-string-beginning (&optional pos)
   "Return beginning of string containing POS.
@@ -793,14 +967,15 @@ POS defaults to the current position of point."
        (narrow-to-region (evil-string-beginning) (evil-string-end))))
      ,@body))
 
-;;; Macro helpers
-
-(eval-and-compile
-  (defun evil-unquote (exp)
-    "Return EXP unquoted."
-    (if (eq (car-safe exp) 'quote)
-        (cadr exp)
-      exp)))
+(defmacro evil-with-or-without-comment (&rest body)
+  "Try BODY narrowed to the current comment; then try BODY unnarrowed.
+If BODY returns non-nil inside the current comment, return that.
+Otherwise, execute BODY again, but without the restriction."
+  (declare (indent defun)
+           (debug t))
+  `(or (when (or (evil-in-comment-p) (evil-in-string-p))
+         (evil-narrow-to-comment ,@body))
+       (progn ,@body)))
 
 ;;; Highlighting
 

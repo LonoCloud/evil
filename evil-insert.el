@@ -1,7 +1,7 @@
 ;;;; Insert state
 
 (require 'evil-undo)
-(require 'evil-states)
+(require 'evil-core)
 (require 'evil-repeat)
 (require 'evil-visual)
 (require 'evil-digraphs)
@@ -12,24 +12,25 @@
   :cursor (bar . 2)
   :message "-- INSERT --"
   :exit-hook (evil-cleanup-insert-state)
+  :input-method t
   (cond
    ((evil-insert-state-p)
-    (add-hook 'pre-command-hook 'evil-insert-repeat-hook nil t)
+    (add-hook 'pre-command-hook 'evil-insert-repeat-hook)
     (unless evil-want-fine-undo
-      (evil-start-undo-step)))
+      (evil-start-undo-step t)))
    (t
-    (remove-hook 'pre-command-hook 'evil-insert-repeat-hook t)
+    (remove-hook 'pre-command-hook 'evil-insert-repeat-hook)
     (setq evil-insert-repeat-info evil-repeat-info)
     (evil-set-marker ?^ nil t)
     (unless evil-want-fine-undo
-      (evil-end-undo-step))
+      (evil-end-undo-step t))
     (when evil-move-cursor-back
       (evil-adjust)))))
 
 (defun evil-insert-repeat-hook ()
   "Record insertion keys in `evil-insert-repeat-info'."
   (setq evil-insert-repeat-info (last evil-repeat-info))
-  (remove-hook 'pre-command-hook 'evil-insert-repeat-hook t))
+  (remove-hook 'pre-command-hook 'evil-insert-repeat-hook))
 
 (defun evil-cleanup-insert-state ()
   "Called when Insert state is about to be exited.
@@ -47,53 +48,74 @@ Handles the repeat-count of the insertion command."
         (dotimes (v (1- vcount))
           (goto-char (point-min))
           (forward-line (+ line v))
-          (if (numberp col)
-              (move-to-column col t)
-            (funcall col))
-          (dotimes (i (or evil-insert-count 1))
-            (evil-execute-repeat-info
-             (cdr evil-insert-repeat-info))))))))
+          (when (or (not evil-insert-skip-empty-lines)
+                    (not (integerp col))
+                    (save-excursion
+                      (end-of-line)
+                      (>= (current-column) col)))
+            (if (integerp col)
+                (move-to-column col t)
+              (funcall col))
+            (dotimes (i (or evil-insert-count 1))
+              (evil-execute-repeat-info
+               (cdr evil-insert-repeat-info)))))))))
 
-(defun evil-insert (count &optional vcount)
+(defun evil-insert (count &optional vcount skip-empty-lines)
   "Switch to Insert state just before point.
 The insertion will be repeated COUNT times and repeated once for
-the next VCOUNT-1 lines starting at the same column."
+the next VCOUNT-1 lines starting at the same column.
+If SKIP-EMPTY-LINES is non-nil, the insertion will not be performed
+on lines on which the insertion point would be after the end of the
+lines. This is the default behaviour for Visual-state insertion."
   (interactive
    (list (prefix-numeric-value current-prefix-arg)
          (when (evil-visual-state-p)
-           (if (eq (evil-visual-type) 'block)
-               (evil-visual-block-rotate 'upper-left)
-             (goto-char (evil-visual-beginning)))
-           (when (eq (evil-visual-type) 'block)
-             (count-lines (evil-visual-beginning)
-                          (evil-visual-end))))))
-  (setq evil-insert-count count
-        evil-insert-lines nil
-        evil-insert-vcount (and vcount
-                                (> vcount 1)
-                                (list (line-number-at-pos)
-                                      (current-column)
-                                      vcount)))
-  (evil-insert-state 1))
+           (evil-visual-rotate 'upper-left)
+           (when (memq evil-visual-type '(block line))
+             (count-lines evil-visual-beginning
+                          evil-visual-end)))
+         (evil-visual-state-p)))
+  (if (and (evil-called-interactively-p)
+           (evil-visual-state-p)
+           (and (eq evil-visual-type 'line)))
+      (evil-insert-line count vcount)
+    (setq evil-insert-count count
+          evil-insert-lines nil
+          evil-insert-vcount (and vcount
+                                  (> vcount 1)
+                                  (list (line-number-at-pos)
+                                        (current-column)
+                                        vcount))
+          evil-insert-skip-empty-lines skip-empty-lines)
+    (evil-insert-state 1)))
 
-(defun evil-append (count &optional vcount)
+(defun evil-append (count &optional vcount skip-empty-lines)
   "Switch to Insert state just after point.
-The insertion will be repeated COUNT times."
+The insertion will be repeated COUNT times and repeated once for
+the next VCOUNT-1 lines starting at the same column. If
+SKIP-EMPTY-LINES is non-nil, the insertion will not be performed
+on lines on which the insertion point would be after the end of
+the lines."
   (interactive
    (list (prefix-numeric-value current-prefix-arg)
          (when (evil-visual-state-p)
-           (if (eq (evil-visual-type) 'block)
-               ;; go to upper-left corner first so that
+           (evil-visual-rotate (if (eq evil-visual-type 'block)
+                                   'upper-right
+                                 'upper-left))
+           (when (memq evil-visual-type '(block line))
+             (save-excursion
+               ;; go to upper-left corner temporarily so
                ;; `count-lines' yields accurate results
-               (evil-visual-block-rotate 'upper-left)
-             (goto-char (evil-visual-end)))
-           (when (eq (evil-visual-type) 'block)
-             (prog1 (count-lines (evil-visual-beginning)
-                                 (evil-visual-end))
-               (evil-visual-block-rotate 'upper-right))))))
-  (unless (or (eolp) (evil-visual-state-p))
-    (forward-char))
-  (evil-insert count vcount))
+               (evil-visual-rotate 'upper-left)
+               (count-lines evil-visual-beginning
+                            evil-visual-end))))))
+  (if (and (evil-called-interactively-p)
+           (evil-visual-state-p)
+           (and (eq evil-visual-type 'line)))
+      (evil-append-line count vcount)
+    (unless (or (eolp) (evil-visual-state-p))
+      (forward-char))
+    (evil-insert count vcount skip-empty-lines)))
 
 (defun evil-insert-resume (count)
   "Switch to Insert state at previous insertion point."
@@ -186,12 +208,12 @@ The insertion is repeated COUNT times."
            ;; put cursor at (i.e., right before) the prompt
            (put-text-property 0 1 'cursor t string)
            (overlay-put overlay 'after-string string)
-           (setq char1 (read-key))
+           (setq char1 (evil-read-key))
            (setq string (string char1))
            (put-text-property 0 1 'face 'minibuffer-prompt string)
            (put-text-property 0 1 'cursor t string)
            (overlay-put overlay 'after-string string)
-           (setq char2 (read-key)))
+           (setq char2 (evil-read-key)))
        (delete-overlay overlay))
      (list count (list char1 char2))))
   (let ((digraph (or (evil-digraph digraph)
@@ -203,13 +225,21 @@ The insertion is repeated COUNT times."
 (defun evil-execute-in-normal-state ()
   "Execute the next command in Normal state."
   (interactive)
-  (evil-normal-state)
-  (if (eq this-command 'evil-execute-in-normal-state)
-      (add-hook 'post-command-hook
-                'evil-execute-in-normal-state nil t)
+  (let (evil-move-cursor-back)
+    (evil-normal-state))
+  (setq evil-old-move-cursor-back evil-move-cursor-back
+        evil-move-cursor-back nil)
+  (add-hook 'post-command-hook 'evil-execute-in-normal-state-hook))
+
+(defun evil-execute-in-normal-state-hook ()
+  "Return to Insert state."
+  (unless (eq this-command 'evil-execute-in-normal-state)
+    (let (evil-move-cursor-back)
+      (evil-insert-state))
+    (setq evil-move-cursor-back evil-old-move-cursor-back
+          evil-old-move-cursor-back nil)
     (remove-hook 'post-command-hook
-                 'evil-execute-in-normal-state t)
-    (evil-insert-state)))
+                 'evil-execute-in-normal-state-hook)))
 
 (defun evil-copy-from-above (arg)
   "Copy characters from preceding non-blank line.
@@ -271,23 +301,61 @@ COL defaults to the current column."
 
 ;;; Completion
 
-(evil-define-command evil-complete ()
-  "Complete to the nearest preceding word.
-Search forward if a match isn't found."
-  :repeat change
-  (interactive)
-  (if (minibufferp)
-      (minibuffer-complete)
-    (dabbrev-expand nil)))
-
-(evil-define-command evil-complete-line (&optional arg)
-  "Complete a whole line."
+(evil-define-command evil-complete-next (&optional arg)
+  "Complete to the nearest following word.
+Search backward if a match isn't found.
+Calls `evil-complete-next-func'."
   :repeat change
   (interactive "P")
-  (let ((hippie-expand-try-functions-list
-         '(try-expand-line
-           try-expand-line-all-buffers)))
-    (hippie-expand arg)))
+  (if (minibufferp)
+      (funcall evil-complete-next-minibuffer-func)
+    (funcall evil-complete-next-func arg)))
+
+(evil-define-command evil-complete-previous (&optional arg)
+  "Complete to the nearest preceding word.
+Search forward if a match isn't found.
+Calls `evil-complete-previous-func'."
+  :repeat change
+  (interactive "P")
+  (if (minibufferp)
+      (funcall evil-complete-previous-minibuffer-func)
+    (funcall evil-complete-previous-func arg)))
+
+(evil-define-command evil-complete-next-line (&optional arg)
+  "Complete a whole line.
+Calls `evil-complete-next-line-func'."
+  :repeat change
+  (interactive "P")
+  (if (minibufferp)
+      (funcall evil-complete-next-minibuffer-func)
+    (funcall evil-complete-next-line-func arg)))
+
+(evil-define-command evil-complete-previous-line (&optional arg)
+  "Complete a whole line.
+Calls `evil-complete-previous-line-func'."
+  :repeat change
+  (interactive "P")
+  (if (minibufferp)
+      (funcall evil-complete-previous-minibuffer-func)
+    (funcall evil-complete-previous-line-func arg)))
+
+(defun evil-paste-from-register (register)
+  "Paste from REGISTER."
+  (interactive
+   (let ((overlay (make-overlay (point) (point)))
+         (string "\""))
+     (unwind-protect
+         (progn
+           ;; display " in the buffer while reading register
+           (put-text-property 0 1 'face 'minibuffer-prompt string)
+           (put-text-property 0 1 'cursor t string)
+           (overlay-put overlay 'after-string string)
+           (list (or evil-this-register (read-char))))
+       (delete-overlay overlay))))
+  (when (fboundp 'evil-paste-before)
+    (when (evil-paste-before nil register t)
+      ;; go to end of pasted text
+      (forward-char))))
 
 (provide 'evil-insert)
 

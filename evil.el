@@ -50,10 +50,11 @@
 
 (require 'evil-vars)
 (require 'evil-compatibility)
+(require 'evil-interactive)
 (require 'evil-common)
 (require 'evil-types)
 (require 'evil-undo)
-(require 'evil-states)
+(require 'evil-core)
 (require 'evil-repeat)
 (require 'evil-visual)
 (require 'evil-search)
@@ -65,6 +66,7 @@
 (require 'evil-replace)
 (require 'evil-integration)
 (require 'evil-maps)
+(require 'evil-ex)
 
 (provide 'evil)
 

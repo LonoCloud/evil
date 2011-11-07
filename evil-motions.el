@@ -1,12 +1,79 @@
-;;;; Motions
+;;;; Motions and text objects
+
+;; Motions are defined with the macro `evil-define-motion'. A motion
+;; is a command with an optional argument called the COUNT (which can
+;; be accessed with the special interactive code "<c>"), or with no
+;; arguments at all. A motion must specify the command properties
+;; :keep-visual t and :repeat motion.
+;;
+;; Text objects are defined with `evil-define-text-object'. Their
+;; behavior is either to extend the selection in Visual state, or to
+;; return a pair of buffer positions in Operator-Pending state. Outer
+;; text objects are bound in the keymap `evil-outer-text-objects-map',
+;; and inner text objects are bound in `evil-inner-text-objects-map'.
+;;
+;; Usual text objects like words, WORDS, paragraphs and sentences are
+;; defined via a corresponding move-function. This function must have
+;; the following properties:
+;;
+;;   1. Take exactly one argument, the count.
+;;   2. When the count is positive, move point forward to the first
+;;      character after the end of the next count-th object.
+;;   3. When the count is negative, move point backward to the first
+;;      character of the count-th previous object.
+;;   4. If point is placed on the first character of an object, the
+;;      backward motion does NOT count that object.
+;;   5. If point is placed on the last character of an object, the
+;;      forward motion DOES count that object.
+;;   6. The return value is "count left", i.e., in forward direction
+;;      count is decreased by one for each successful move and in
+;;      backward direction count is increased by one for each
+;;      successful move, returning the final value of count.
+;;      Therefore, if the complete move is successful, the return
+;;      value is 0.
+;;
+;; A useful macro in this regard is `evil-motion-loop', which quits
+;; when point does not move further and returns the count difference.
+;; It also provides a "unit value" of 1 or -1 for use in each
+;; iteration. For example, a hypothetical "foo-bar" move could be
+;; written as such:
+;;
+;;     (defun foo-bar (count)
+;;       (evil-motion-loop (var count)
+;;         (forward-foo var) ; `var' is 1 or -1 depending on COUNT
+;;         (forward-bar var)))
+;;
+;; If "forward-foo" and "-bar" didn't accept negative arguments,
+;; we could choose their backward equivalents by inspecting `var':
+;;
+;;     (defun foo-bar (count)
+;;       (evil-motion-loop (var count)
+;;         (cond
+;;          ((< var 0)
+;;           (backward-foo 1)
+;;           (backward-bar 1))
+;;          (t
+;;           (forward-foo 1)
+;;           (forward-bar 1)))))
+;;
+;; After a forward motion, point has to be placed on the first
+;; character after some object, unless no motion was possible at all.
+;; Similarly, after a backward motion, point has to be placed on the
+;; first character of some object. This implies that point should
+;; NEVER be moved to eob or bob, unless an object ends or begins at
+;; eob or bob. (Usually, Emacs motions always move as far as possible.
+;; But we want to use the motion-function to identify certain objects
+;; in the buffer, and thus exact movement to object boundaries is
+;; required.)
 
 (require 'evil-common)
 (require 'evil-visual)
 (require 'evil-operators)
 
 (evil-define-state motion
-  "Motion state"
-  :tag " <M> ")
+  "Motion state."
+  :tag " <M> "
+  :suppress-keymap t)
 
 (defmacro evil-define-motion (motion args &rest body)
   "Define an motion command MOTION.
@@ -16,16 +83,13 @@
            (debug (&define name lambda-list
                            [&optional stringp]
                            [&rest keywordp sexp]
-                           [&optional ("interactive" interactive)]
+                           [&optional ("interactive" [&rest form])]
                            def-body)))
   (let (arg doc interactive jump key keys type)
     (when args
       (setq args `(&optional ,@(delq '&optional args))
-            interactive
             ;; the count is either numerical or nil
-            '(list (when current-prefix-arg
-                     (prefix-numeric-value
-                      current-prefix-arg)))))
+            interactive '("<c>")))
     ;; collect docstring
     (when (and (> (length body) 1)
                (or (eq (car-safe (car-safe body)) 'format)
@@ -42,7 +106,11 @@
         (setq keys (append keys (list key arg))))))
     ;; collect `interactive' specification
     (when (eq (car-safe (car-safe body)) 'interactive)
-      (setq interactive `(append ,interactive ,@(cdr (pop body)))))
+      (setq interactive (cdr (pop body))))
+    (when interactive
+      (setq interactive (apply 'evil-interactive-form interactive))
+      (setq keys (append keys (cdr-safe interactive))
+            interactive (car-safe interactive)))
     ;; macro expansion
     `(progn
        ;; refresh echo area in Eldoc mode
@@ -53,7 +121,7 @@
          ,@(when doc `(,doc))          ; avoid nil before `interactive'
          ,@keys
          :keep-visual t
-         :repeat nil
+         :repeat motion
          (interactive
           ,@(when (or jump interactive)
               `((progn
@@ -105,13 +173,14 @@ the loop immediately quits. See also `evil-loop'.
           (signal (car err) (cdr err)))))))
 
 (defmacro evil-narrow-to-line (&rest body)
-  "Narrow to the current line."
+  "Narrow BODY to the current line."
   (declare (indent defun)
            (debug t))
   `(save-restriction
      (narrow-to-region
       (line-beginning-position)
-      (if (evil-normal-state-p)
+      (if (and evil-move-cursor-back
+               (evil-normal-state-p))
           (max (line-beginning-position)
                (1- (line-end-position)))
         (line-end-position)))
@@ -122,6 +191,14 @@ the loop immediately quits. See also `evil-loop'.
           (error "Beginning of line"))
          (end-of-buffer
           (error "End of line"))))))
+
+(defmacro evil-narrow-to-line-if (cond &rest body)
+  "Narrow BODY to the current line if COND yields non-nil."
+  (declare (indent 1)
+           (debug t))
+  `(if ,cond
+       (evil-narrow-to-line ,@body)
+     ,@body))
 
 (defun evil-goto-min (&rest positions)
   "Go to the smallest position in POSITIONS.
@@ -146,19 +223,46 @@ See also `evil-goto-min'."
 (defun evil-eobp ()
   "Whether point is at end-of-buffer w.r.t. end-of-line."
   (or (eobp)
-      (and (not (evil-visual-state-p))
+      (and (evil-normal-state-p)
            (= (point) (1- (point-max)))
            (not (eolp)))))
 
 (evil-define-motion evil-forward-char (count)
   "Move cursor to the right by COUNT characters."
   :type exclusive
-  (evil-narrow-to-line (forward-char (or count 1))))
+  (evil-narrow-to-line-if
+      ;; Narrow movement to the current line if `evil-cross-lines'
+      ;; is nil. However, do allow the following exception: if
+      ;; `evil-move-cursor-back' is nil and we are next to a newline,
+      ;; that newline should be available to operators ("dl", "x").
+      (and (not evil-cross-lines)
+           (or evil-move-cursor-back
+               (not (evil-operator-state-p))
+               (not (eolp))))
+    (evil-motion-loop (nil (or count 1))
+      ;; skip newlines when crossing lines in Normal/Motion state
+      (when (and evil-cross-lines
+                 (not (evil-operator-state-p))
+                 (not (eolp))
+                 (save-excursion (forward-char) (eolp)))
+        (forward-char))
+      (forward-char))))
 
 (evil-define-motion evil-backward-char (count)
   "Move cursor to the left by COUNT characters."
   :type exclusive
-  (evil-narrow-to-line (backward-char (or count 1))))
+  (evil-narrow-to-line-if
+      ;; narrow movement to the current line if `evil-cross-lines'
+      ;; is nil (cf. `evil-forward-char')
+      (and (not evil-cross-lines)
+           (or evil-move-cursor-back
+               (not (evil-operator-state-p))
+               (not (bolp))))
+    (evil-motion-loop (nil (or count 1))
+      (backward-char)
+      ;; adjust cursor when crossing lines in Normal/Motion state
+      (unless (evil-operator-state-p)
+        (evil-adjust-eol)))))
 
 ;; The purpose of this function is the provide line motions which
 ;; preserve the column. This is how `previous-line' and `next-line'
@@ -173,16 +277,19 @@ See also `evil-goto-min'."
   (evil-signal-without-movement
     (setq this-command 'next-line)
     (let ((opoint (point)))
-      (unwind-protect
+      (condition-case err
           (with-no-warnings
             (next-line count))
-        (cond
-         ((> count 0)
-          (line-move-finish (or goal-column temporary-goal-column)
-                            opoint nil))
-         ((< count 0)
-          (line-move-finish (or goal-column temporary-goal-column)
-                            opoint t)))))))
+        ((beginning-of-buffer end-of-buffer)
+         (let ((col (or goal-column
+                        (if (consp temporary-goal-column)
+                            (car temporary-goal-column)
+                          temporary-goal-column))))
+           (if line-move-visual
+               (vertical-motion (cons col 0))
+             (line-move-finish col opoint (< count 0)))
+           ;; maybe we should just (ding) ?
+           (signal (car err) (cdr err))))))))
 
 (evil-define-command evil-goto-mark (char)
   "Go to marker denoted by CHAR."
@@ -286,7 +393,8 @@ In Insert state, insert a newline."
                     (get (widget-type widget) 'widget-type))))
       (when (evil-operator-state-p)
         (setq evil-inhibit-operator t))
-      (widget-button-press (point)))
+      (when (fboundp 'widget-button-press)
+        (widget-button-press (point))))
      ((and (fboundp 'button-at)
            (fboundp 'push-button)
            (button-at (point)))
@@ -311,13 +419,13 @@ In Insert state, insert a newline."
     (evil-line-move (1- (or count 1)))))
 
 (evil-define-motion evil-previous-visual-line (count)
-  "Move the cursor COUNT screen lines down."
+  "Move the cursor COUNT screen lines up."
   :type exclusive
   (let ((line-move-visual t))
     (evil-line-move (- (or count 1)))))
 
 (evil-define-motion evil-next-visual-line (count)
-  "Move the cursor COUNT screen lines up."
+  "Move the cursor COUNT screen lines down."
   :type exclusive
   (let ((line-move-visual t))
     (evil-line-move (or count 1))))
@@ -331,11 +439,12 @@ on the first non-blank character."
   (back-to-indentation))
 
 (evil-define-motion evil-window-middle ()
-  "Move the cursor to the middle line of the current window
-on the first non-blank character."
+  "Move the cursor to the middle line of the buffer text currently visible in the window on the first non-blank character."
   :jump t
   :type line
-  (move-to-window-line (/ (window-body-height) 2))
+  (move-to-window-line (/ (save-excursion
+                            (move-to-window-line -1))
+                          2))
   (back-to-indentation))
 
 (evil-define-motion evil-window-bottom (count)
@@ -404,6 +513,12 @@ If COUNT is given, move COUNT - 1 lines downward first."
   (evil-next-line (or count 1))
   (evil-first-non-blank))
 
+(evil-define-motion evil-next-line-1-first-non-blank (count)
+  "Move the cursor COUNT-1 lines down on the first non-blank character."
+  :type line
+  (evil-next-line (1- (or count 1)))
+  (evil-first-non-blank))
+
 (evil-define-motion evil-goto-first-line (count)
   "Go to the first non-blank character of line COUNT.
 By default the first line."
@@ -425,7 +540,9 @@ By default the last line."
 (evil-define-motion evil-beginning-of-visual-line ()
   "Move the cursor to the first character of the current screen line."
   :type exclusive
-  (beginning-of-visual-line))
+  (if (fboundp 'beginning-of-visual-line)
+      (beginning-of-visual-line)
+    (beginning-of-line)))
 
 (evil-define-motion evil-first-non-blank-of-visual-line ()
   "Move the cursor to the first non blank character
@@ -438,71 +555,17 @@ of the current screen line."
   "Move the cursor to the last character of the current screen line.
 If COUNT is given, move COUNT - 1 screen lines downward first."
   :type inclusive
-  (end-of-visual-line count)
+  (if (fboundp 'end-of-visual-line)
+      (end-of-visual-line count)
+    (end-of-line count))
   (unless (evil-visual-state-p)
     (evil-adjust-eol)))
 
 (evil-define-motion evil-jump-to-tag ()
   "Jump to tag under point."
   :jump t
-  (let ((tag (thing-at-point 'word)))
+  (let ((tag (thing-at-point 'symbol)))
     (find-tag tag)))
-
-;;; Text object and movement framework
-
-;; Usual text objects like words, WORDS, paragraphs and sentences are
-;; defined via a corresponding move-function. This function must have
-;; the following properties:
-;;
-;;   1. Take exactly one argument, the count.
-;;   2. When the count is positive, move point forward to the first
-;;      character after the end of the next count-th object.
-;;   3. When the count is negative, move point backward to the first
-;;      character of the count-th previous object.
-;;   4. If point is placed on the first character of an object, the
-;;      backward motion does NOT count that object.
-;;   5. If point is placed on the last character of an object, the
-;;      forward motion DOES count that object.
-;;   6. The return value is "count left", i.e., in forward direction
-;;      count is decreased by one for each successful move and in
-;;      backward direction count is increased by one for each
-;;      successful move, returning the final value of count.
-;;      Therefore, if the complete move is successful, the return
-;;      value is 0.
-;;
-;; A useful macro in this regard is `evil-motion-loop', which quits
-;; when point does not move further and returns the count difference.
-;; It also provides a "unit value" of 1 or -1 for use in each
-;; iteration. For example, a hypothetical "foo-bar" move could be
-;; written as such:
-;;
-;;     (defun foo-bar (count)
-;;       (evil-motion-loop (var count)
-;;         (forward-foo var) ; `var' is 1 or -1 depending on COUNT
-;;         (forward-bar var)))
-;;
-;; If "forward-foo" and "-bar" didn't accept negative arguments,
-;; we could choose their backward equivalents by inspecting `var':
-;;
-;;     (defun foo-bar (count)
-;;       (evil-motion-loop (var count)
-;;         (cond
-;;          ((< var 0)
-;;           (backward-foo 1)
-;;           (backward-bar 1))
-;;          (t
-;;           (forward-foo 1)
-;;           (forward-bar 1)))))
-;;
-;; After a forward motion, point has to be placed on the first
-;; character after some object, unless no motion was possible at all.
-;; Similarly, after a backward motion, point has to be placed on the
-;; first character of some object. This implies that point should
-;; NEVER be moved to eob or bob, unless an object ends or begins at
-;; eob or bob. (Usually, Emacs motions always move as far as possible.
-;; But we want to use the motion-function to identify certain objects
-;; in the buffer, and thus exact movement to object boundaries is
-;; required.)
 
 (defmacro evil-define-union-move (name args &rest moves)
   "Create a movement function named NAME.
@@ -532,11 +595,10 @@ not be performed.
                         moves)))
     `(evil-define-motion ,name (count)
        ,@(when doc `(,doc))
-       (let (bounds)
-         (evil-motion-loop (,var (or count 1))
-           (if (> , var 0)
-               (evil-goto-min ,@moves)
-             (evil-goto-max ,@moves)))))))
+       (evil-motion-loop (,var (or count 1))
+         (if (> ,var 0)
+             (evil-goto-min ,@moves)
+           (evil-goto-max ,@moves))))))
 
 (defun evil-move-chars (chars count)
   "Move point to the end or beginning of a sequence of CHARS.
@@ -632,7 +694,8 @@ of the object; otherwise it is placed at the end of the object."
           (funcall forward 1)
           (when inclusive
             (unless (bobp) (backward-char)))
-          (evil-adjust-eol))))
+          (when (evil-normal-state-p)
+            (evil-adjust-eol t)))))
      ((> count 0)
       (when (evil-eobp)
         (signal 'end-of-buffer nil))
@@ -645,27 +708,29 @@ of the object; otherwise it is placed at the end of the object."
             (goto-char (point-max))
           (when inclusive
             (unless (bobp) (backward-char)))
-          (evil-adjust-eol))))
+          (when (evil-normal-state-p)
+            (evil-adjust-eol t)))))
      (t
       count))))
 
 (evil-define-motion evil-move-empty-lines (count)
   "Move to the next or previous empty line, repeated COUNT times."
   :type exclusive
-  (catch 'done
-    (evil-motion-loop (var (or count 1))
-      (cond
-       ((< var 0)
-        (goto-char
-         (or (save-excursion
-               (unless (bobp)
-                 (backward-char)
-                 (re-search-backward "^$" nil t)))
-             (point))))
-       (t
-        (when (and (re-search-forward "^$" nil t)
-                   (not (eobp)))
-          (forward-char)))))))
+  (evil-motion-loop (var (or count 1))
+    (cond
+     ((< var 0)
+      (goto-char
+       (or (save-excursion
+             (unless (bobp)
+               (backward-char)
+               (re-search-backward "^$" nil t)))
+           (point))))
+     (t
+      (let ((orig (point)))
+        (when (re-search-forward "^$" nil t)
+          (if (eobp)
+              (goto-char orig)
+            (forward-char))))))))
 
 (evil-define-union-move evil-move-word (count)
   "Move by words."
@@ -678,39 +743,48 @@ of the object; otherwise it is placed at the end of the object."
   (evil-move-chars "^ \t\r\n" count)
   (evil-move-empty-lines count))
 
-(evil-define-motion evil-forward-word-begin (count bigword)
+(evil-define-motion evil-forward-word-begin (count &optional bigword)
   "Move the cursor to the beginning of the COUNT-th next word.
 If BIGWORD is non-nil, move by WORDS."
   :type exclusive
-  (setq bigword (if bigword #'evil-move-WORD #'evil-move-word))
-  (if (eq evil-this-operator 'evil-change)
-      (evil-move-end count bigword)
-    (evil-move-beginning count bigword)))
+  (let ((move (if bigword #'evil-move-WORD #'evil-move-word))
+        (orig (point)))
+    (prog1 (if (eq evil-this-operator 'evil-change)
+               (evil-move-end count move)
+             (evil-move-beginning count move))
+      ;; if we reached the beginning of a new line in Operator-Pending
+      ;; state, go back to the end of the previous line
+      (when (and (evil-operator-state-p)
+                 (> (point) orig)
+                 (bolp))
+        (backward-char)))))
 
-(evil-define-motion evil-forward-word-end (count bigword)
+(evil-define-motion evil-forward-word-end (count &optional bigword)
   "Move the cursor to the end of the COUNT-th next word.
 If BIGWORD is non-nil, move by WORDS."
   :type inclusive
-  (setq bigword (if bigword #'evil-move-WORD #'evil-move-word))
-  (if (evil-operator-state-p)
-      ;; if changing a one-letter word, don't move point at all
-      (prog1 (evil-move-end count bigword)
-        (unless (bobp) (backward-char)))
-    (evil-move-end count bigword nil t)))
+  (let ((move (if bigword #'evil-move-WORD #'evil-move-word)))
+    ;; if changing a one-letter word, don't move point to the
+    ;; next word (which would change two words)
+    (if (and (evil-operator-state-p)
+             (looking-at (format "[%s]" evil-word)))
+        (prog1 (evil-move-end count move)
+          (unless (bobp) (backward-char)))
+      (evil-move-end count move nil t))))
 
-(evil-define-motion evil-backward-word-begin (count bigword)
+(evil-define-motion evil-backward-word-begin (count &optional bigword)
   "Move the cursor to the beginning of the COUNT-th previous word.
 If BIGWORD is non-nil, move by WORDS."
   :type exclusive
-  (setq bigword (if bigword #'evil-move-WORD #'evil-move-word))
-  (evil-move-beginning (- (or count 1)) bigword))
+  (let ((move (if bigword #'evil-move-WORD #'evil-move-word)))
+    (evil-move-beginning (- (or count 1)) move)))
 
-(evil-define-motion evil-backward-word-end (count bigword)
+(evil-define-motion evil-backward-word-end (count &optional bigword)
   "Move the cursor to the end of the COUNT-th previous word.
 If BIGWORD is non-nil, move by WORDS."
   :type inclusive
-  (setq bigword (if bigword #'evil-move-WORD #'evil-move-word))
-  (evil-move-end (- (or count 1)) bigword nil t))
+  (let ((move (if bigword #'evil-move-WORD #'evil-move-word)))
+    (evil-move-end (- (or count 1)) move nil t)))
 
 (evil-define-motion evil-forward-WORD-begin (count)
   "Move the cursor to the beginning of the COUNT-th next WORD."
@@ -844,7 +918,7 @@ If BIGWORD is non-nil, move by WORDS."
   "Move to the next COUNT'th occurrence of CHAR."
   :jump t
   :type inclusive
-  (interactive (list (read-char)))
+  (interactive "<c>c")
   (setq count (or count 1))
   (let ((fwd (> count 0)))
     (setq evil-last-find (list #'evil-find-char char fwd))
@@ -852,7 +926,7 @@ If BIGWORD is non-nil, move by WORDS."
     (let ((case-fold-search nil))
       (unless (prog1
                   (search-forward (char-to-string char)
-                                  (unless evil-find-skip-newlines
+                                  (unless evil-cross-lines
                                     (if fwd
                                         (line-end-position)
                                       (line-beginning-position)))
@@ -864,14 +938,14 @@ If BIGWORD is non-nil, move by WORDS."
   "Move to the previous COUNT'th occurrence of CHAR."
   :jump t
   :type exclusive
-  (interactive (list (read-char)))
+  (interactive "<c>c")
   (evil-find-char (- (or count 1)) char))
 
 (evil-define-motion evil-find-char-to (count char)
   "Move before the next COUNT'th occurence of CHAR."
   :jump t
   :type inclusive
-  (interactive (list (read-char)))
+  (interactive "<c>c")
   (unwind-protect
       (progn
         (evil-find-char count char)
@@ -884,7 +958,7 @@ If BIGWORD is non-nil, move by WORDS."
   "Move before the previous COUNT'th occurence of CHAR."
   :jump t
   :type exclusive
-  (interactive (list (read-char)))
+  (interactive "<c>c")
   (evil-find-char-to (- (or count 1)) char))
 
 (evil-define-motion evil-repeat-find-char (count)
@@ -956,6 +1030,11 @@ and jump to the corresponding one."
         (goto-char (1+ pos))
         (backward-list)))))))
 
+(evil-define-motion evil-lookup ()
+  "Look up the keyword at point.
+Calls `evil-lookup-func'."
+  (funcall evil-lookup-func))
+
 (defmacro evil-define-text-object (object args &rest body)
   "Define a text object command OBJECT.
 BODY should return a range (BEG END) to the right of point
@@ -970,6 +1049,7 @@ if COUNT is positive, and to the left of it if negative.
   (let* ((args (delq '&optional args))
          (count (or (pop args) 'count))
          (args (when args `(&optional ,@args)))
+         (extend t)
          arg doc key keys type)
     ;; collect docstring
     (when (stringp (car-safe body))
@@ -981,6 +1061,8 @@ if COUNT is positive, and to the left of it if negative.
       (cond
        ((eq key :type)
         (setq type arg))
+       ((eq key :extend-selection)
+        (setq extend arg))
        (t
         (setq keys (append keys (list key arg))))))
     ;; macro expansion
@@ -990,65 +1072,82 @@ if COUNT is positive, and to the left of it if negative.
        :type ,type
        (setq ,count (or ,count 1))
        (when (/= ,count 0)
-         (let* ((dir (evil-visual-direction))
+         (let* ((dir evil-visual-direction)
                 (type (or ',type evil-visual-char))
                 mark point range region selection temp)
            (cond
+            ;; Visual state: extend the current selection
             ((and (evil-visual-state-p)
                   (evil-called-interactively-p))
              ;; if we are at the beginning of the Visual selection,
              ;; go to the left (negative COUNT); if at the end,
              ;; go to the right (positive COUNT)
-             (setq dir (evil-visual-direction)
+             (setq dir evil-visual-direction
                    ,count (* ,count dir)
-                   range (evil-range (point) (point) type)
                    region (evil-range (mark t) (point))
-                   selection (evil-range (evil-visual-beginning)
-                                         (evil-visual-end)))
-             ;; expand Visual selection so that point
-             ;; is outside already selected text
-             (evil-visual-make-selection (mark t) (point) type)
-             (evil-visual-expand-region)
-             (setq selection (evil-range (evil-visual-beginning)
-                                         (evil-visual-end)))
-             ;; the preceding selection should contain
-             ;; at least one object; if not, add it now
-             (let ((,count (- dir)))
-               (setq temp (progn ,@body)))
+                   selection (evil-visual-range))
+             (when ',extend
+               (setq range (evil-range (point) (point) type)))
+             ;; select the object under point
+             (let ((,count dir))
+               (setq temp (progn ,@body))
+               (unless (evil-range-p temp)
+                 ;; At the end of the buffer?
+                 ;; Try the other direction.
+                 (setq ,count (- dir)
+                       temp (progn ,@body))))
              (when (and (evil-range-p temp)
                         (not (evil-subrange-p temp selection))
-                        (if (< dir 0)
-                            (= (evil-range-beginning temp)
-                               (evil-range-beginning selection))
-                          (= (evil-range-end temp)
-                             (evil-range-end selection))))
-               ;; found an unselected preceding object:
-               ;; decrease COUNT and adjust selection boundaries
-               (setq ,count (if (< ,count 0) (1+ ,count) (1- ,count))
-                     range (evil-range-union temp range)))
+                        (or (not ',extend)
+                            (if (< dir 0)
+                                (>= (evil-range-end temp)
+                                    (evil-range-end selection))
+                              (<= (evil-range-beginning temp)
+                                  (evil-range-beginning selection)))))
+               ;; found an unselected object under point:
+               ;; decrease COUNT by one and save the result
+               (setq ,count (if (< ,count 0) (1+ ,count) (1- ,count)))
+               (if ',extend
+                   (setq range (evil-range-union temp range))
+                 (setq range temp)
+                 (evil-set-type range (evil-type range type))))
+             ;; now look for remaining objects
              (when (/= ,count 0)
-               ;; main attempt: find range from current position
+               ;; expand the Visual selection so point is outside it
+               (evil-visual-make-selection (mark t) (point) type)
+               (evil-visual-expand-region)
+               (setq selection (evil-visual-range))
+               (if (< dir 0)
+                   (evil-goto-min (evil-range-beginning range)
+                                  (evil-range-beginning selection))
+                 (evil-goto-max (evil-range-end range)
+                                (evil-range-end selection)))
                (setq temp (progn ,@body))
                (when (evil-range-p temp)
-                 (setq range (evil-range-union temp range))))
+                 (if ',extend
+                     (setq range (evil-range-union temp range))
+                   (setq range temp)
+                   (evil-set-type range (evil-type range type))))
+               (evil-visual-contract-region))
              (cond
-              ((evil-subrange-p range selection)
-               ;; Visual fall-back: enlarge selection by one character
+              ;; if the previous attempts failed, then enlarge
+              ;; the selection by one character as a last resort
+              ((and ',extend (evil-subrange-p range selection))
                (if (< ,count 0)
-                   (evil-visual-select (1- (evil-visual-beginning))
-                                       (evil-visual-end)
-                                       type)
-                 (evil-visual-select (evil-visual-beginning)
-                                     (1+ (evil-visual-end))
-                                     type)))
-              (t
+                   (evil-visual-select (1- evil-visual-beginning)
+                                       evil-visual-end type)
+                 (evil-visual-select evil-visual-beginning
+                                     (1+ evil-visual-end) type)))
+              ((evil-range-p range)
                ;; Find the union of the range and the selection.
-               ;; Actually, this uses the region (point and mark)
-               ;; rather than the selection to prevent the object
-               ;; from unnecessarily overwriting the position of
-               ;; the mark at the other end of the selection.
-               (setq range (evil-contract-range range)
-                     range (evil-range-union range region))
+               ;; Actually, this uses point and mark rather than the
+               ;; selection boundaries to prevent the object from
+               ;; unnecessarily overwriting the mark's position;
+               ;; if the selection is large enough, only point
+               ;; needs to move.
+               (setq range (evil-contract-range range))
+               (when ',extend
+                 (setq range (evil-range-union range region)))
                ;; the beginning is mark and the end is point
                ;; unless the selection goes the other way
                (setq mark  (evil-range-beginning range)
@@ -1056,13 +1155,24 @@ if COUNT is positive, and to the left of it if negative.
                      type  (evil-type range type))
                (when (< dir 0)
                  (evil-swap mark point))
-               ;; select the range
+               ;; select the union
                (evil-visual-make-selection mark point type))))
+            ;; not Visual state: return a pair of buffer positions
             (t
-             (setq selection (evil-range (point) (point) type)
-                   range (progn ,@body))
+             (setq range (progn ,@body))
+             (unless (evil-range-p range)
+               (setq ,count (- ,count)
+                     range (progn ,@body)))
              (when (evil-range-p range)
-               (evil-range-union range selection)))))))))
+               (setq selection (evil-range (point) (point) type))
+               (if ',extend
+                   (setq range (evil-range-union range selection))
+                 (evil-set-type range (evil-type range type)))
+               ;; ensure the range is properly expanded
+               (evil-contract-range range)
+               (evil-expand-range range)
+               (evil-set-range-properties range nil)
+               range))))))))
 
 (defun evil-inner-object-range (count forward &optional backward type)
   "Return an inner text object range (BEG END) of COUNT objects.
@@ -1089,7 +1199,7 @@ If one is unspecified, the other is used with a negative argument."
                 (funcall backward 1)
                 (point))
           end (save-excursion
-                (funcall forward 1)
+                (funcall forward count)
                 (point)))
     (evil-range beg end type)))
 
@@ -1097,17 +1207,18 @@ If one is unspecified, the other is used with a negative argument."
   "Return a text object range (BEG END) of COUNT objects with whitespace.
 See `evil-inner-object-range' for more details."
   (let ((range (evil-inner-object-range count forward backward type)))
-    (if newlines
-        (evil-add-whitespace-to-range range count)
+    (save-excursion
       (save-restriction
-        (narrow-to-region
-         (save-excursion
-           (goto-char (evil-range-beginning range))
-           (line-beginning-position))
-         (save-excursion
-           (goto-char (evil-range-end range))
-           (line-end-position)))
-        (evil-add-whitespace-to-range range count)))))
+        (if newlines
+            (evil-add-whitespace-to-range range count)
+          (narrow-to-region
+           (save-excursion
+             (goto-char (evil-range-beginning range))
+             (line-beginning-position))
+           (save-excursion
+             (goto-char (evil-range-end range))
+             (line-end-position)))
+          (evil-add-whitespace-to-range range count))))))
 
 (defun evil-paren-range (count open close &optional exclusive)
   "Return a range (BEG END) of COUNT delimited text objects.
@@ -1122,11 +1233,16 @@ use `evil-regexp-range'."
         (close-regexp (regexp-quote (string close)))
         (count (or count 1))
         level beg end range)
-    (if (or (evil-in-comment-p)
-            (and (evil-in-string-p) (not (eq open close))))
-        ;; if inside a comment, don't use the syntax table
-        (evil-regexp-range count open-regexp close-regexp exclusive)
-      (save-excursion
+    (save-excursion
+      (if (or (evil-in-comment-p)
+              (and (evil-in-string-p) (not (eq open close))))
+          ;; if in a comment, first look inside the comment only;
+          ;; failing that, look outside it
+          (or (evil-regexp-range count open-regexp close-regexp exclusive)
+              (progn
+                (evil-goto-min (evil-string-beginning)
+                               (evil-comment-beginning))
+                (evil-paren-range count open close exclusive)))
         (with-syntax-table (copy-syntax-table (syntax-table))
           (cond
            ((= count 0))
@@ -1149,10 +1265,16 @@ use `evil-regexp-range'."
             (modify-syntax-entry close (format ")%c" open))
             ;; handle edge cases
             (if (< count 0)
-                (when (if exclusive (looking-back open-regexp)
+                (when (if exclusive
+                          (or (looking-back open-regexp)
+                              (and (looking-back close-regexp)
+                                   (not (looking-at close-regexp))))
                         (looking-back close-regexp))
                   (backward-char))
-              (when (if exclusive (looking-at close-regexp)
+              (when (if exclusive
+                        (or (looking-at close-regexp)
+                            (and (looking-at open-regexp)
+                                 (not (looking-back open-regexp))))
                       (looking-at open-regexp))
                 (forward-char)))
             ;; find OPEN
@@ -1183,20 +1305,39 @@ OPEN is a regular expression matching the opening sequence,
 and CLOSE is a regular expression matching the closing sequence.
 If EXCLUSIVE is non-nil, OPEN and CLOSE are excluded from
 the range; otherwise they are included. See also `evil-paren-range'."
-  (let ((either (format "\\(%s\\)\\|\\(%s\\)" open close))
-        (count (or count 1))
-        (level 0)
-        beg end range)
-    (save-excursion
-      (save-match-data
-        (evil-narrow-to-comment
+  (evil-with-or-without-comment
+    (let ((either (format "\\(%s\\)\\|\\(%s\\)" open close))
+          (count (or count 1))
+          (level 0)
+          beg end range)
+      (save-excursion
+        (save-match-data
           ;; find beginning of range: handle edge cases
+          (unless (or (looking-at either)
+                      (looking-back either nil t))
+            ;; Is point inside a delimiter?
+            (if (< count 0)
+                (when (re-search-backward either nil t)
+                  (goto-char (match-end 0))
+                  (re-search-forward either nil t))
+              (when (re-search-forward either nil t)
+                (goto-char (match-beginning 0))
+                (re-search-backward either nil t))))
+          ;; Is point next to a delimiter?
           (if (< count 0)
-              (when (if exclusive (looking-back open) (looking-back close))
+              (when (if exclusive
+                        (or (looking-back open)
+                            (and (looking-back close)
+                                 (not (looking-at close))))
+                      (looking-back close))
                 (goto-char (match-beginning 0)))
-            (when (if exclusive (looking-at close) (looking-at open))
+            (when (if exclusive
+                      (or (looking-at close)
+                          (and (looking-at open)
+                               (not (looking-back open))))
+                    (looking-at open))
               (goto-char (match-end 0))))
-          ;; then loop over remainder
+          ;; now loop over remainder
           (while (and (< level (abs count))
                       (re-search-backward either nil t))
             (if (looking-at open)
@@ -1223,13 +1364,20 @@ the range; otherwise they are included. See also `evil-paren-range'."
               (setq range (evil-range beg end))))
           range)))))
 
+(defun evil-xml-range (&optional count exclusive)
+  "Return a range (BEG END) of COUNT matching XML tags.
+If EXCLUSIVE is non-nil, the tags themselves are excluded
+from the range."
+  (evil-regexp-range
+   count "<\\(?:[^/ ]\\(?:[^>]*?[^/>]\\)?\\)?>" "</[^>]+?>" exclusive))
+
 (defun evil-add-whitespace-to-range (range &optional dir pos regexp)
   "Add whitespace at one side of RANGE, depending on POS.
 If POS is before the range, add trailing whitespace;
 if POS is after the range, add leading whitespace.
-If POS is inside the range, add trailing if DIR is positive
-and leading if DIR is negative. If there is no trailing whitespace,
-add leading whitespace and vice versa. POS defaults to point.
+If there is no trailing whitespace, add leading and vice versa.
+If POS is inside the range, add trailing if DIR is positive and
+leading if DIR is negative. POS defaults to point.
 REGEXP is a regular expression for matching whitespace;
 the default is \"[ \\f\\t\\n\\r\\v]+\"."
   (let* ((pos (or pos (point)))
@@ -1241,16 +1389,12 @@ the default is \"[ \\f\\t\\n\\r\\v]+\"."
       (save-match-data
         (goto-char pos)
         (cond
-         ((< dir 0)
-          (if (looking-back regexp)
-              (evil-add-whitespace-after-range range regexp)
-            (or (evil-add-whitespace-before-range range regexp)
-                (evil-add-whitespace-after-range range regexp))))
+         ((if (< dir 0) (looking-back regexp) (not (looking-at regexp)))
+          (or (evil-add-whitespace-after-range range regexp)
+              (evil-add-whitespace-before-range range regexp)))
          (t
-          (if (looking-at regexp)
-              (evil-add-whitespace-before-range range regexp)
-            (or (evil-add-whitespace-after-range range regexp)
-                (evil-add-whitespace-before-range range regexp)))))
+          (or (evil-add-whitespace-before-range range regexp)
+              (evil-add-whitespace-after-range range regexp))))
         range))))
 
 (defun evil-add-whitespace-before-range (range &optional regexp)
@@ -1307,14 +1451,14 @@ Returns t if RANGE was successfully adjusted and nil otherwise."
         (evil-set-range range nil (line-end-position 0)))
       (not (evil-subrange-p orig range)))))
 
-(evil-define-text-object evil-a-word (count bigword)
+(evil-define-text-object evil-a-word (count &optional bigword)
   "Select a word.
 If BIGWORD is non-nil, select a WORD."
   (evil-an-object-range count (if bigword
                                   'evil-move-WORD
                                 'evil-move-word)))
 
-(evil-define-text-object evil-inner-word (count bigword)
+(evil-define-text-object evil-inner-word (count &optional bigword)
   "Select inner word.
 If BIGWORD is non-nil, select inner WORD."
   (evil-inner-object-range count (if bigword
@@ -1349,67 +1493,89 @@ If BIGWORD is non-nil, select inner WORD."
 
 (evil-define-text-object evil-a-paren (count)
   "Select a parenthesis."
+  :extend-selection nil
   (evil-paren-range count ?\( ?\)))
 
 (evil-define-text-object evil-inner-paren (count)
   "Select inner parenthesis."
+  :extend-selection nil
   (evil-paren-range count ?\( ?\) t))
 
 (evil-define-text-object evil-a-bracket (count)
   "Select a square bracket."
+  :extend-selection nil
   (evil-paren-range count ?\[ ?\]))
 
 (evil-define-text-object evil-inner-bracket (count)
   "Select inner square bracket."
+  :extend-selection nil
   (evil-paren-range count ?\[ ?\] t))
 
 (evil-define-text-object evil-a-curly (count)
   "Select a curly bracket (\"brace\")."
+  :extend-selection nil
   (evil-paren-range count ?{ ?}))
 
 (evil-define-text-object evil-inner-curly (count)
   "Select inner curly bracket (\"brace\")."
+  :extend-selection nil
   (evil-paren-range count ?{ ?} t))
 
 (evil-define-text-object evil-an-angle (count)
   "Select an angle bracket."
-  (evil-paren-range count ?< ?> t))
+  :extend-selection nil
+  (evil-paren-range count ?< ?>))
 
 (evil-define-text-object evil-inner-angle (count)
   "Select inner angle bracket."
-  (evil-paren-range count ?< ?>))
+  :extend-selection nil
+  (evil-paren-range count ?< ?> t))
 
 (evil-define-text-object evil-a-single-quote (count)
   "Select a single-quoted expression."
+  :extend-selection nil
   (evil-paren-range count ?' ?'))
 
 (evil-define-text-object evil-inner-single-quote (count)
   "Select inner single-quoted expression."
+  :extend-selection nil
   (evil-paren-range count ?' ?' t))
 
 (evil-define-text-object evil-a-double-quote (count)
   "Select a double-quoted expression."
+  :extend-selection nil
   (evil-paren-range count ?\" ?\"))
 
 (evil-define-text-object evil-inner-double-quote (count)
   "Select inner double-quoted expression."
+  :extend-selection nil
   (evil-paren-range count ?\" ?\" t))
 
 (evil-define-text-object evil-a-back-quote (count)
   "Select a back-quoted expression."
+  :extend-selection nil
   (evil-paren-range count ?\` ?\`))
 
 (evil-define-text-object evil-inner-back-quote (count)
   "Select inner back-quoted expression."
+  :extend-selection nil
   (evil-paren-range count ?\` ?\` t))
 
 (evil-define-text-object evil-a-tag (count)
   "Select a tag block."
-  (evil-regexp-range count "<[^/>]+?>" "</[^/>]+?>"))
+  :extend-selection nil
+  (evil-xml-range count))
 
 (evil-define-text-object evil-inner-tag (count)
   "Select inner tag block."
-  (evil-regexp-range count "<[^/>]+?>" "</[^/>]+?>" t))
+  :extend-selection nil
+  (cond
+   ((and (evil-called-interactively-p)
+         (eq last-command this-command))
+    (setq this-command 'evil-a-tag)
+    (evil-a-tag count))
+   (t
+    (evil-xml-range count t))))
 
 (provide 'evil-motions)
 

@@ -22,232 +22,129 @@
 ;;                  +--------> | I | <--------+
 ;;                             \___/
 ;;
-;; Normally, a repeat is triggered whenever a command leaves Normal
-;; state, or when it changes the buffer in Normal state (thereby
-;; running the `after-change-functions' hook). A command may also
-;; trigger a repeat with the :repeat command property. When executed
-;; in Normal state, a command with :repeat t will always be repeated;
-;; a command with :repeat nil will never be repeated. (Command
-;; properties may be set with `evil-add-command-properties'.)
+;; The recording of a repeat is started in one of two cases: Either a
+;; command is about being executed (in pre-command-hook) or normal
+;; state is exited. The recording is stopped whenever a command has
+;; being completed and evil is in normal state afterwards. Therefore,
+;; a non-inserting command in normal-state is recorded as a single
+;; repeat unit. In contrast, if the command leaves normal state and
+;; starts insert-state, all commands that are executed until
+;; insert-state is left and normal state is reactivated are recorded
+;; together in one repeat unit. In other words, a repeat unit consists
+;; of all commands that are executed starting and ending in normal
+;; state.
 ;;
-;; When a repeat is being recorded, each command is stored in
-;; `evil-repeat-info' from `post-command-hook'. When the repeat ends,
-;; the accumulated changes in `evil-repeat-info' are inserted into
-;; `evil-repeat-ring'. The dot command, "." (`evil-repeat'),
-;; replays the most recent entry in the ring.
+;; Not all commands are recored. There are several commands that are
+;; completely ignored and other commands that even abort the currently
+;; active recording, e.g., commands that change the current buffer.
 ;;
-;; In most cases, a command is recorded as the key-presses that
-;; invoked it. In special cases, it may be recorded as a buffer
-;; change. A repeat is represented as a list where each element
-;; is either
+;; During recording the repeat information is appended to the variable
+;; `evil-repeat-info', which is cleared when the recording
+;; starts. This accumulated repeat information is put into the
+;; `evil-repeat-ring' when the recording is finished. The dot command,
+;; `\[evil-repeat]' (`evil-repeat') replays the most recent entry in
+;; the ring, preceeding repeats can be replayed using
+;; `\[evil-repeat-pop]' (`evil-repeat-pop').
 ;;
-;;     - an array, which corresponds to a key-sequence, or
-;;     - a list (FUNCTION PARAMS...), which will be called as
-;;       (apply FUNCTION PARAMS).
+;; Repeat information can be stored in almost arbitrary form. How the
+;; repeat information for each single command is recored is determined
+;; by the :repeat property of the command. This property has the
+;; following interpretation:
 ;;
-;; This information is executed with `evil-execute-repeat-info',
+;; t         record commands by storing the key-sequence that invoked it
+;; nil       ignore this command completely
+;; ignore    synonym to nil
+;; motion    command is recorded by storing the key-sequence but only in
+;;           insert state, otherwise it is ignored.
+;; abort     stop recording of repeat information immediately
+;; change    record commands by storing buffer changes
+;; SYMBOL    if SYMBOL is contained as key in `evil-repeat-types'
+;;           call the corresponding (function-)value, otherwise
+;;           call the function associated with SYMBOL. In both
+;;           cases the function should take exactly one argument
+;;           which is either 'pre or 'post depending on whether
+;;           the function is called before or after the execution
+;;           of the command.
+;;
+;; Therefore, using a certain SYMBOL one can write specific repeation
+;; functions for each command.
+;;
+;; Each value of ring `evil-repeat-info', i.e., each single repeat
+;; information must be one of the following two possibilities:
+;; If element is a sequence, it is regarded as a key-sequence to
+;; be repeated. Otherwise the element must be a list
+;; (FUNCTION PARAMS ...) which will be called using
+;; (apply FUNCTION PARAMS) whenever this repeat is being executed.
+;;
+;; A user supplied repeat function can use the functions
+;; `evil-record-repeat' to append further repeat-information of the
+;; form described above to `evil-repeat-info'. See the implementation
+;; of `evil-repeat-keystrokes' and `evil-repeat-changes' for examples.
+;;
+;; The repeat information is executed with `evil-execute-repeat-info',
 ;; which passes key-sequence elements to `execute-kbd-macro' and
-;; executes other elements as defined above.
-;;
-;; A special version is `evil-execute-repeat-info-with-count'.
-;; This function works as `evil-execute-repeat-info', but replaces
-;; the count of the first command. This is done by parsing the
-;; key-sequence, ignoring all calls to `digit-prefix-argument' and
-;; `negative-argument', and prepending the count as a string to the
-;; vector of the remaining key-sequence.
+;; executes other elements as defined above.  A special version is
+;; `evil-execute-repeat-info-with-count'.  This function works as
+;; `evil-execute-repeat-info', but replaces the count of the first
+;; command. This is done by parsing the key-sequence, ignoring all
+;; calls to `digit-prefix-argument' and `negative-argument', and
+;; prepending the count as a string to the vector of the remaining
+;; key-sequence.
 
 (require 'evil-undo)
-(require 'evil-states)
+(require 'evil-core)
+
+(defsubst evil-repeat-recording-p ()
+  "Returns non-nil iff a recording is in progress."
+  (eq evil-recording-repeat t))
 
 (defun evil-repeat-start ()
   "Start recording a new repeat into `evil-repeat-info'."
-  (unless evil-recording-repeat
-    (evil-repeat-reset t)
-    (evil-repeat-record-position)
-    (evil-repeat-record-buffer)))
+  (evil-repeat-reset t)
+  (evil-repeat-record-buffer))
 
 (defun evil-repeat-stop ()
   "Stop recording a repeat.
 Update `evil-repeat-ring' with the accumulated changes
 in `evil-repeat-info' and clear variables."
   (unwind-protect
-      (progn
+      (when (evil-repeat-recording-p)
         (setq evil-repeat-info
               (evil-normalize-repeat-info evil-repeat-info))
-        (when evil-repeat-info
+        (when (and evil-repeat-info evil-repeat-ring)
           (ring-insert evil-repeat-ring evil-repeat-info)))
-    (evil-repeat-reset)))
+    (evil-repeat-reset nil)))
 
-(defun evil-repeat-reset (&optional flag)
+(defun evil-repeat-abort ()
+  "Abort current repeation."
+  (evil-repeat-reset 'abort))
+
+(defun evil-repeat-reset (flag)
   "Clear all repeat recording variables.
 Set `evil-recording-repeat' to FLAG."
-  (when (markerp evil-repeat-marker)
-    (set-marker evil-repeat-marker nil))
-  (setq evil-repeat-marker nil
-        evil-recording-repeat flag
+  (setq evil-recording-repeat flag
         evil-repeat-info nil
-        evil-repeat-changes nil
-        evil-repeat-keys nil
         evil-repeat-buffer nil))
 
-(defun evil-repeat-type (command &optional default)
-  "Return the :repeat property of COMMAND.
-If COMMAND doesn't have this property, return DEFAULT."
-  (if (evil-has-property command :repeat)
-      (evil-get-command-property command :repeat)
-    default))
-
-;; called from `evil-normal-state-exit-hook'
-(defun evil-repeat-start-hook ()
-  "Record a new repeat when exiting Normal state.
-Does not record in Emacs state or if the current command
-has :repeat nil."
-  (when (and (eq (evil-repeat-type this-command t) t)
-             (not (evil-emacs-state-p)))
-    (evil-repeat-start)))
-
-;; called from `pre-command-hook'
-(defun evil-repeat-pre-hook ()
-  "Record new repeat if the current command has :repeat t.
-Disallow repeat if the command specifies :repeat nil."
-  (cond
-   ;; abort the repeat if the buffer changes, if in
-   ;; Emacs state or the command specifies :repeat abort
-   ((or (evil-repeat-different-buffer-p)
-        (evil-emacs-state-p)
-        (eq (evil-repeat-type this-command) 'abort))
-    (evil-repeat-reset 'abort))
-   ;; Already in repeat?
-   (evil-recording-repeat
-    (when (eq evil-recording-repeat 'abort)
-      (evil-repeat-reset)))
-   ;; Start a repeat from Normal state?
-   ((evil-normal-state-p)
-    (cond
-     ;; :repeat t, start repeat
-     ((eq (evil-repeat-type this-command) t)
-      (evil-repeat-start))
-     ;; :repeat nil, prevent repeat
-     ((eq (evil-repeat-type this-command t) nil)
-      (evil-repeat-reset 'abort))
-     ;; no :repeat, but the command may change the buffer
-     (t
-      (evil-repeat-record-buffer)))))
-  ;; refresh current repeat
-  (when evil-recording-repeat
-    (evil-repeat-record-keys)
-    (evil-repeat-record-position)
-    (evil-repeat-record-buffer)
-    (setq evil-repeat-changes nil)))
-
-;; called from `post-command-hook'
-(defun evil-repeat-post-hook ()
-  "Refresh `evil-repeat-info' while recording a repeat."
-  (cond
-   ((not evil-recording-repeat))
-   ;; abort the repeat
-   ((or (eq evil-recording-repeat 'abort)
-        (evil-repeat-different-buffer-p)
-        (evil-emacs-state-p))
-    (evil-repeat-reset))
-   ;; finish the repeat
-   ((evil-normal-state-p)
-    (evil-repeat-record-command)
-    (evil-repeat-stop))
-   (t
-    ;; refresh the repeat
-    (when evil-recording-repeat
-      (evil-repeat-record-command)
-      (evil-repeat-record-position)))))
-
-;; called from the `after-change-functions' hook
-(defun evil-repeat-change-hook (beg end length)
-  "Record change information for current command."
-  (unless (or (eq evil-recording-repeat 'abort)
-              (evil-repeat-different-buffer-p t)
-              (null (evil-repeat-type this-command t))
-              (evil-emacs-state-p)
-              (null evil-state))
-    (unless evil-recording-repeat
-      (evil-repeat-start))
-    (when (and (eq (evil-repeat-type this-command) 'change)
-               evil-repeat-marker)
-      (evil-repeat-record-change
-       (list (- beg evil-repeat-marker)
-             (buffer-substring beg end)
-             length)))))
-
-(defun evil-repeat-record-command ()
-  "Record the current command into `evil-repeat-info'."
-  (unless evil-recording-repeat
-    (evil-repeat-start))
-  (cond
-   ((not (functionp this-command))) ; ignore macros
-   ;; prefix arguments always preceed the actual commands and they
-   ;; are part of the key sequence of the actual command, therefore
-   ;; they can be safely ignored
-   ((memq this-command
-          '(digit-argument
-            negative-argument
-            universal-argument
-            universal-argument-minus
-            universal-argument-other-key)))
-   ;; check if the command is change-based
-   ((eq (evil-repeat-type this-command) 'change)
-    (evil-repeat-record `(evil-execute-change
-                          ,evil-repeat-changes
-                          ,(- (point) evil-repeat-marker))))
-   ;; usual command: record by key-sequence
-   (t
-    (evil-repeat-record (if (> (length (this-command-keys)) 0)
-                            (this-command-keys)
-                          evil-repeat-keys)))))
-
-(defun evil-repeat-record (info)
-  "Add INFO to the end of `evil-repeat-info'."
-  (unless evil-recording-repeat
-    (evil-repeat-start))
-  (setq evil-repeat-info (nconc evil-repeat-info (list info))))
-
-(defun evil-repeat-record-change (change)
-  "Add CHANGE to the end of `evil-repeat-changes'."
-  (unless evil-recording-repeat
-    (evil-repeat-start))
-  (setq evil-repeat-changes (nconc evil-repeat-changes (list change))))
-
-(defun evil-repeat-record-position (&optional pos)
-  "Set `evil-repeat-marker' to POS or point."
-  (unless evil-recording-repeat
-    (evil-repeat-start))
-  (unless (markerp evil-repeat-marker)
-    (setq evil-repeat-marker (make-marker)))
-  (set-marker evil-repeat-marker (or pos (point))))
+(defsubst evil-repeat-record-position (&optional pos)
+  "Set `evil-repeat-pos' to POS or point."
+  (setq evil-repeat-pos (or pos (point))))
 
 (defun evil-repeat-record-buffer ()
   "Set `evil-repeat-buffer' to the current buffer."
-  (unless evil-recording-repeat
-    (evil-repeat-start))
-  (setq evil-repeat-buffer (current-buffer)))
-
-;; Some functions, such as `execute-kbd-macro', may irrevocably
-;; clear `this-command-keys'. Therefore, make a backup from
-;; `pre-command-hook'.
-(defun evil-repeat-record-keys (&optional pos)
-  "Set `evil-repeat-keys' to the current value of `this-command-keys'."
-  (unless evil-recording-repeat
-    (evil-repeat-start))
-  (setq evil-repeat-keys (this-command-keys)))
+  (unless (minibufferp)
+    (setq evil-repeat-buffer (current-buffer))))
 
 (defmacro evil-save-repeat-info (&rest body)
   "Execute BODY, protecting the values of repeat variables."
   (declare (indent defun)
            (debug t))
-  `(let ((evil-repeat-ring (ring-copy evil-repeat-ring))
-         evil-repeating-command
+  `(let (evil-repeat-ring
          evil-recording-repeat
+         evil-recording-current-command
          evil-repeat-info
          evil-repeat-changes
-         evil-repeat-marker
+         evil-repeat-pos
          evil-repeat-keys
          evil-repeat-buffer
          this-command
@@ -260,7 +157,149 @@ If STRICT is non-nil, returns t if the previous buffer
 is unknown; otherwise returns t only if the previous
 buffer is known and different from the current buffer."
   (and (or (buffer-live-p evil-repeat-buffer) strict)
+       (not (minibufferp))
        (not (eq (current-buffer) evil-repeat-buffer))))
+
+(defun evil-repeat-type (command &optional default)
+  "Return the :repeat property of COMMAND.
+If COMMAND doesn't have this property, return DEFAULT."
+  (when (functionp command) ; ignore keyboard macros
+    (let ((type (if (evil-has-property command :repeat)
+                    (evil-get-command-property command :repeat)
+                  default)))
+      (or (cdr-safe (assq type evil-repeat-types)) type))))
+
+(defun evil-repeat-force-abort-p (repeat-type)
+  "Returns non-nil iff the current command should abort the recording of repeat information."
+  (or (evil-repeat-different-buffer-p)           ; ... buffer changed
+      (eq repeat-type 'abort)                    ; ... explicitely forced
+      (eq evil-recording-repeat 'abort)          ; ... already aborted
+      (evil-emacs-state-p)                       ; ... in Emacs state
+      (evil-mouse-events-p (this-command-keys))  ; ... mouse events
+      (minibufferp)))                            ; ... minibuffer activated
+
+(defun evil-repeat-record (info)
+  "Add INFO to the end of `evil-repeat-info'."
+  (when (evil-repeat-recording-p)
+    (setq evil-repeat-info (nconc evil-repeat-info (list info)))))
+
+;; called from `evil-normal-state-exit-hook'
+(defun evil-repeat-start-hook ()
+  "Record a new repeat when exiting Normal state.
+Does not record in Emacs state or if the current command
+has :repeat nil."
+  (when (and (eq (evil-repeat-type this-command t) t)
+             (not (evil-emacs-state-p)))
+    (evil-repeat-start)))
+
+;; called from `pre-command-hook'
+(defun evil-repeat-pre-hook ()
+  "Prepare the current command for recording the repeation."
+  (when evil-local-mode
+    (let ((repeat-type (evil-repeat-type this-command t)))
+      (cond
+       ;; abort the repeat
+       ((evil-repeat-force-abort-p repeat-type)
+        ;; We mark the current record as being aborted, because there
+        ;; may be further pre-hooks following before the post-hook is
+        ;; called.
+        (evil-repeat-abort))
+       ;; ignore those commands completely
+       ((null repeat-type))
+       ;; record command
+       (t
+        ;; In normal-state, each command is a single repeation,
+        ;; therefore start a new repeation.
+        (when (evil-normal-state-p)
+          (evil-repeat-start))
+        (setq evil-recording-current-command t)
+        (funcall repeat-type 'pre))))))
+
+;; called from `post-command-hook'
+(defun evil-repeat-post-hook ()
+  "Finish recording of repeat-information for the current-command."
+  (when (and evil-local-mode evil-recording-repeat)
+    (let ((repeat-type (evil-repeat-type this-command t)))
+      (cond
+       ;; abort the repeat
+       ((evil-repeat-force-abort-p repeat-type)
+        ;; The command has been aborted but is complete, so just reset
+        ;; the recording state.
+        (evil-repeat-reset nil))
+       ;; ignore if command should not be recorded or the current
+       ;; command is not being recorded
+       ((or (null repeat-type)
+            (not evil-recording-current-command)))
+       ;; record command
+       (t
+        (funcall repeat-type 'post)
+        ;; In normal state, the repeat sequence is complete, so record it.
+        (when (evil-normal-state-p)
+          (evil-repeat-stop))))))
+  ;; done with recording the current command
+  (setq evil-recording-current-command nil))
+
+(defun evil-repeat-keystrokes (flag)
+  "Repeation recording function for commands that are repeated by keystrokes."
+  (cond
+   ((eq flag 'pre)
+    (setq evil-repeat-keys (this-command-keys)))
+   ((eq flag 'post)
+    (evil-repeat-record (if (zerop (length (this-command-keys)))
+                            evil-repeat-keys
+                          (this-command-keys)))
+    ;; erase commands keys to prevent double recording
+    (clear-this-command-keys t))))
+
+(defun evil-repeat-motion (flag)
+  "Repeation for motions. Motions are recorded by keystroke but only in insert state."
+  (when (memq evil-state '(insert replace))
+    (evil-repeat-keystrokes flag)))
+
+(defun evil-repeat-changes (flag)
+  "Repeation recording function for commands that are repeated by buffer changes."
+  (cond
+   ((eq flag 'pre)
+    (add-hook 'after-change-functions #'evil-repeat-change-hook nil t)
+    (evil-repeat-start-record-changes))
+   ((eq flag 'post)
+    (remove-hook 'after-change-functions #'evil-repeat-change-hook t)
+    (evil-repeat-finish-record-changes))))
+
+;; called from the `after-change-functions' hook
+(defun evil-repeat-change-hook (beg end length)
+  "Record change information for current command."
+  (let ((repeat-type (evil-repeat-type this-command t)))
+    (when (and (evil-repeat-recording-p)
+               (eq repeat-type 'evil-repeat-changes)
+               (not (evil-emacs-state-p))
+               (not (evil-repeat-different-buffer-p t))
+               evil-state)
+      (unless (evil-repeat-recording-p)
+        (evil-repeat-start))
+      (evil-repeat-record-change (- beg evil-repeat-pos)
+                                 (buffer-substring beg end)
+                                 length))))
+
+(defun evil-repeat-record-change (relpos ins ndel)
+  "Record the current buffer changes during a repeat.
+If CHANGE is specified, it is added to `evil-repeat-changes'."
+  (when (evil-repeat-recording-p)
+    (setq evil-repeat-changes
+          (nconc evil-repeat-changes (list (list relpos ins ndel))))))
+
+(defun evil-repeat-start-record-changes ()
+  "Starts the recording of a new set of buffer changes."
+  (setq evil-repeat-changes nil)
+  (evil-repeat-record-position))
+
+(defun evil-repeat-finish-record-changes ()
+  "Finishes the recording of buffer changes and records them as repeat."
+  (when (evil-repeat-recording-p)
+    (evil-repeat-record `(evil-execute-change
+                          ,evil-repeat-changes
+                          ,(- (point) evil-repeat-pos)))
+    (setq evil-repeat-changes nil)))
 
 (defun evil-normalize-repeat-info (repeat-info)
   "Concatenate consecutive arrays in REPEAT-INFO.
@@ -270,6 +309,7 @@ Returns a single array."
          cur cur-last)
     (dolist (rep repeat-info)
       (cond
+       ((null rep))
        ((arrayp rep)
         (setq rep (listify-key-sequence rep))
         (cond
@@ -302,65 +342,63 @@ position before insertion.
 REL-POINT is the relative position to point before the changed
 where point should be placed after all changes."
   (evil-save-repeat-info
-    (let ((p (point)))
+    (let ((point (point)))
       (dolist (change changes)
-        (goto-char (+ p (nth 0 change)))
+        (goto-char (+ point (nth 0 change)))
         (delete-char (nth 2 change))
         (insert (nth 1 change)))
-      (goto-char (+ p rel-point)))))
+      (goto-char (+ point rel-point)))))
 
 (defun evil-execute-repeat-info (repeat-info)
   "Executes a repeat-information REPEAT-INFO."
-  (let ((evil-repeating-command t))
-    (evil-save-repeat-info
-      (dolist (rep (copy-sequence repeat-info))
-        (cond
-         ((arrayp rep)
-          (execute-kbd-macro rep))
-         ((consp rep)
-          (apply (car rep) (cdr rep)))
-         (t
-          (error "Unexpected repeat-info: %S" rep)))))))
+  (evil-save-repeat-info
+    (dolist (rep repeat-info)
+      (cond
+       ((or (arrayp rep) (stringp rep))
+        (execute-kbd-macro rep))
+       ((consp rep)
+        (apply (car rep) (cdr rep)))
+       (t
+        (error "Unexpected repeat-info: %S" rep))))))
 
 ;; TODO: currently we prepend the replacing count before the
 ;; key-sequence that calls the command. Can we use direct
 ;; modification of prefix-arg instead? Does it work in
-;; conjunction with execute-kbd-macro?
+;; conjunction with `execute-kbd-macro'?
 (defun evil-execute-repeat-info-with-count (count repeat-info)
   "Repeat the repeat-information REPEAT-INFO with the count of
 the first command replaced by COUNT. The count is replaced if
 and only if COUNT is non-nil."
-  (let ((evil-repeating-command t))
-    (evil-save-repeat-info
-      (cond
-       ;; do nothing (zero repeating)
-       ((and count (zerop count)))
-       ;; replace count
-       (count
-        (let ((evil-repeat-count count)
-              done)
-          (while (and repeat-info
-                      (arrayp (car repeat-info))
-                      (not done))
-            (let* ((count-and-cmd (evil-extract-count (pop repeat-info))))
-              (push (vconcat (number-to-string count)
-                             (nth 2 count-and-cmd)
-                             (nth 3 count-and-cmd))
-                    repeat-info)
-              (setq done t)))
-          (evil-execute-repeat-info repeat-info)))
-       ;; repeat with original count
-       (t
-        (evil-execute-repeat-info repeat-info))))))
+  (evil-save-repeat-info
+    (cond
+     ;; do nothing (zero repeating)
+     ((and count (zerop count)))
+     ;; replace count
+     (count
+      (let ((evil-repeat-count count)
+            done)
+        (while (and repeat-info
+                    (arrayp (car repeat-info))
+                    (not done))
+          (let* ((count-and-cmd (evil-extract-count (pop repeat-info))))
+            (push (vconcat (number-to-string count)
+                           (nth 2 count-and-cmd)
+                           (nth 3 count-and-cmd))
+                  repeat-info)
+            (setq done t)))
+        (evil-execute-repeat-info repeat-info)))
+     ;; repeat with original count
+     (t
+      (evil-execute-repeat-info repeat-info)))))
 
 (evil-define-command evil-repeat (count &optional save-point)
   "Repeat the last editing command with count replaced by COUNT.
 If SAVE-POINT is non-nil, do not move point."
-  :repeat nil
+  :repeat ignore
   (interactive (list current-prefix-arg
                      (not evil-repeat-move-cursor)))
   (cond
-   (evil-repeating-command
+   ((null evil-repeat-ring)
     (error "Already executing repeat"))
    (save-point
     (save-excursion
@@ -370,62 +408,64 @@ If SAVE-POINT is non-nil, do not move point."
           (kill-buffer-hook
            (cons #'(lambda ()
                      (error "Cannot delete buffer in repeat command"))
-                 kill-buffer-hook)))
-      (setq evil-last-repeat (list (point) count))
-      (evil-save-repeat-info
-        (evil-with-undo
-          (evil-execute-repeat-info-with-count
-           count (ring-ref evil-repeat-ring 0))))))))
+                 kill-buffer-hook))
+          (undo-pointer buffer-undo-list))
+      (evil-with-single-undo
+        (setq evil-last-repeat (list (point) count undo-pointer))
+        (evil-execute-repeat-info-with-count
+         count (ring-ref evil-repeat-ring 0)))))))
 
 ;; TODO: the same issue concering disabled undos as for `evil-paste-pop'
-(defun evil-repeat-pop (count)
+(evil-define-command evil-repeat-pop (count &optional save-point)
   "Replace the just repeated command with a previously executed command.
-This command is allowed only immediately after a `evil-repeat',
-`evil-repeat-pop' or `evil-repeat-pop-next'. This command uses
-the same repeat count that was used for the first repeat.
+Only allowed after `evil-repeat', `evil-repeat-pop' or
+`evil-repeat-pop-next'. Uses the same repeat count that
+was used for the first repeat.
 
-The COUNT argument inserts the COUNT-th previous kill. If COUNT
-is negative this is a more recent kill."
-  (interactive "p")
-  (unless (and (eq last-command 'evil-repeat)
-               evil-last-repeat)
+The COUNT argument inserts the COUNT-th previous kill.
+If COUNT is negative, this is a more recent kill."
+  :repeat nil
+  (interactive (list (prefix-numeric-value current-prefix-arg)
+                     (not evil-repeat-move-cursor)))
+  (cond
+   ((not (and (eq last-command 'evil-repeat)
+              evil-last-repeat))
     (error "Previous command was not evil-repeat: %s" last-command))
-  (evil-undo-pop)
-  (goto-char (car evil-last-repeat))
-  ;; rotate the repeat-ring
-  (while (> count 0)
-    (ring-insert-at-beginning evil-repeat-ring
-                              (ring-remove evil-repeat-ring 0))
-    (setq count (1- count)))
-  (setq this-command 'evil-repeat)
-  (evil-repeat (cadr evil-last-repeat)))
+   (save-point
+    (save-excursion
+      (evil-repeat-pop count)))
+   (t
+    (unless (eq buffer-undo-list (nth 2 evil-last-repeat))
+      (evil-undo-pop))
+    (goto-char (car evil-last-repeat))
+    ;; rotate the repeat-ring
+    (while (> count 0)
+      (when evil-repeat-ring
+        (ring-insert-at-beginning evil-repeat-ring
+                                  (ring-remove evil-repeat-ring 0)))
+      (setq count (1- count)))
+    (while (< count 0)
+      (when evil-repeat-ring
+        (ring-insert evil-repeat-ring
+                     (ring-remove evil-repeat-ring)))
+      (setq count (1+ count)))
+    (setq this-command 'evil-repeat)
+    (evil-repeat (cadr evil-last-repeat)))))
 
-(defun evil-repeat-pop-next (count)
-  "Same as `evil-repeat-pop' with negative COUNT."
-  (interactive "p")
-  (evil-repeat-pop (- count)))
+(evil-define-command evil-repeat-pop-next (count &optional save-point)
+  "Same as `evil-repeat-pop', but with negative COUNT."
+  :repeat nil
+  (interactive (list (prefix-numeric-value current-prefix-arg)
+                     (not evil-repeat-move-cursor)))
+  (evil-repeat-pop (- count) save-point))
 
-;; updates `evil-repeat-info' properly
-(defun evil-read-key (&optional prompt)
-  "Read a key from the keyboard.
-Translates it according to the input method."
-  (let ((old-global-map (current-global-map))
-        (new-global-map (make-sparse-keymap))
-        (overriding-terminal-local-map (make-sparse-keymap))
-        overriding-local-map)
-    (unwind-protect
-        (progn
-          (define-key new-global-map [menu-bar]
-            (lookup-key global-map [menu-bar]))
-          (define-key new-global-map [tool-bar]
-            (lookup-key global-map [tool-bar]))
-          (add-to-list 'new-global-map
-                       (make-char-table 'display-table
-                                        'self-insert-command) t)
-          (use-global-map new-global-map)
-          (evil-repeat-record (this-command-keys))
-          (aref (read-key-sequence prompt nil t) 0))
-      (use-global-map old-global-map))))
+(defadvice read-key-sequence (before evil activate)
+  "Record `this-command-keys' before it is reset."
+  (when (and (evil-repeat-recording-p)
+             evil-recording-current-command)
+    (let ((repeat-type (evil-repeat-type this-command t)))
+      (if (functionp repeat-type)
+          (funcall repeat-type 'post)))))
 
 (provide 'evil-repeat)
 

@@ -1,6 +1,6 @@
 ;;;; Replace state
 
-(require 'evil-states)
+(require 'evil-core)
 (require 'evil-repeat)
 (require 'evil-operators)
 
@@ -27,8 +27,7 @@
       (add-to-list 'evil-replace-alist
                    (cons (point)
                          (unless (eolp)
-                           (char-after)))
-                   t))))
+                           (char-after)))))))
 
 (defun evil-replace-backspace ()
   "Restore character under cursor."
@@ -45,19 +44,26 @@
 (evil-define-operator evil-replace (beg end type char)
   "Replace text from BEG to END with CHAR."
   :motion evil-forward-char
-  (interactive (list (evil-save-cursor
-                       (evil-set-cursor evil-replace-state-cursor)
-                       (evil-read-key))))
-  (if (eq type 'block)
-      (save-excursion
-        (evil-apply-on-block 'evil-replace beg end nil char))
-    (goto-char beg)
-    (while (< (point) end)
-      (if (eq (char-after) ?\n)
-          (forward-char)
-        (delete-char 1)
-        (insert-char char 1)))
-    (goto-char (max beg (1- end)))))
+  (interactive "<R>"
+               (evil-save-cursor
+                 (evil-refresh-cursor 'replace)
+                 (list (evil-read-key))))
+  (when char
+    (if (eq type 'block)
+        (save-excursion
+          (evil-apply-on-block 'evil-replace beg end nil char))
+      (goto-char beg)
+      (while (< (point) end)
+        (if (eq (char-after) ?\n)
+            (forward-char)
+          (delete-char 1)
+          (if (eq char ?\n)
+              (newline)
+            (insert-char char 1))))
+      (if (eq char ?\n)
+          (when evil-auto-indent
+            (indent-according-to-mode))
+        (goto-char (max beg (1- end)))))))
 
 (provide 'evil-replace)
 
