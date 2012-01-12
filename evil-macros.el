@@ -2,6 +2,7 @@
 
 (require 'evil-common)
 (require 'evil-states)
+(require 'evil-repeat)
 
 (defun evil-motion-range (motion &optional count type)
   "Execute a motion and return the buffer positions.
@@ -22,8 +23,18 @@ The return value is a list (BEG END TYPE)."
                 (evil-this-type
                  (or type (evil-type motion 'exclusive))))
             (condition-case err
-                (setq range (call-interactively motion))
+                (let ((repeat-type (evil-repeat-type motion t)))
+                  (if (functionp repeat-type)
+                      (funcall repeat-type 'pre))
+                  (unless (with-local-quit
+                            (setq range (call-interactively motion))
+                            t)
+                    (evil-repeat-abort)
+                    (setq quit-flag t))
+                  (if (functionp repeat-type)
+                      (funcall repeat-type 'post)))
               (error (prog1 nil
+                       (evil-repeat-abort)
                        (setq evil-this-type 'exclusive
                              evil-write-echo-area t)
                        (message (error-message-string err)))))
@@ -78,6 +89,7 @@ The return value is a list (BEG END TYPE)."
                    (stringp (car-safe body))))
       (setq doc (pop body)))
     ;; collect keywords
+    (setq keys (plist-put keys :repeat 'motion))
     (while (keywordp (car-safe body))
       (setq key (pop body)
             arg (pop body)
@@ -99,7 +111,6 @@ The return value is a list (BEG END TYPE)."
          ,@(when doc `(,doc))          ; avoid nil before `interactive'
          ,@keys
          :keep-visual t
-         :repeat motion
          (interactive
           (progn
             (when (evil-get-command-property ',motion :jump)

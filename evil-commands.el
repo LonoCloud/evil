@@ -1771,6 +1771,23 @@ Calls `evil-complete-previous-line-func'."
 
 ;;; Search
 
+(defun evil-repeat-search (flag)
+  "Called to record a search command."
+  (cond
+   ((and (evil-operator-state-p) (eq flag 'pre))
+    (evil-repeat-record (this-command-keys))
+    (evil-clear-command-keys))
+   ((and (evil-operator-state-p) (eq flag 'post))
+    ;; The value of (this-command-keys) at this point should be the
+    ;; key-sequence that called the last command that finished the
+    ;; search, usually RET. Therefore this key-sequence will be
+    ;; recorded in the post-command of the operator. Alternatively we
+    ;; could do it here.
+    (evil-repeat-record (if evil-regexp-search
+                            (car-safe regexp-search-ring)
+                          (car-safe search-ring))))
+   (t (evil-repeat-motion flag))))
+
 (evil-define-motion evil-search-forward ()
   (format "Search forward for user-entered text.
 Searches for regular expression if `evil-regexp-search' is t.%s"
@@ -1779,7 +1796,9 @@ Searches for regular expression if `evil-regexp-search' is t.%s"
               (format "\n\nBelow is the documentation string \
 for `isearch-forward',\nwhich lists available keys:\n\n%s"
                       (documentation 'isearch-forward)) ""))
+  :jump t
   :type exclusive
+  :repeat evil-repeat-search
   (evil-search-incrementally t evil-regexp-search))
 
 (evil-define-motion evil-search-backward ()
@@ -1792,6 +1811,7 @@ for `isearch-forward',\nwhich lists available keys:\n\n%s"
                       (documentation 'isearch-forward)) ""))
   :jump t
   :type exclusive
+  :repeat evil-repeat-search
   (evil-search-incrementally nil evil-regexp-search))
 
 (evil-define-motion evil-search-next (count)
@@ -2125,15 +2145,32 @@ Change to `%s'? "
          (if (eq evil-ex-search-direction 'backward) 'forward 'backward)))
     (evil-ex-search-next count)))
 
+(defun evil-repeat-ex-search (flag)
+  "Called to record a search command."
+  (cond
+   ((and (evil-operator-state-p) (eq flag 'pre))
+    (evil-repeat-record (this-command-keys))
+    (evil-clear-command-keys))
+   ((and (evil-operator-state-p) (eq flag 'post))
+    ;; The value of (this-command-keys) at this point should be the
+    ;; key-sequence that called the last command that finished the
+    ;; search, usually RET. Therefore this key-sequence will be
+    ;; recorded in the post-command of the operator. Alternatively we
+    ;; could do it here.
+    (evil-repeat-record (evil-ex-pattern-regex evil-ex-search-pattern)))
+   (t (evil-repeat-motion flag))))
+
 (evil-define-motion evil-ex-search-forward (count)
   "Starts a forward search."
   :jump t
   :type exclusive
+  :repeat evil-repeat-ex-search
   (evil-ex-start-search 'forward count))
 
 (evil-define-motion evil-ex-search-backward (count)
   "Starts a forward search."
   :jump t
+  :repeat evil-repeat-ex-search
   (evil-ex-start-search 'backward count))
 
 (evil-define-motion evil-ex-search-symbol-forward (count)
