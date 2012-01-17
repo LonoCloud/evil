@@ -173,13 +173,15 @@ Restore the previous state afterwards."
        (evil-change-state ',state)
        ,@body)))
 
-(defun evil-initialize-state (&optional buffer)
+(defun evil-initialize-state (&optional state buffer)
   "Set up the initial state for BUFFER.
-This is the state the buffer comes up in.
+BUFFER defaults to the current buffer.
+Uses STATE if specified, or calls `evil-initial-state-for-buffer'.
 See also `evil-set-initial-state'."
   (with-current-buffer (or buffer (current-buffer))
     (remove-hook 'post-command-hook 'evil-initialize-state t)
-    (evil-change-to-initial-state buffer)))
+    (if state (evil-change-state state)
+      (evil-change-to-initial-state buffer))))
 (put 'evil-initialize-state 'permanent-local-hook t)
 
 (defun evil-initial-state-for-buffer (&optional buffer default)
@@ -404,12 +406,14 @@ may be specified before the body code:
        (unless (get ',mode 'variable-documentation)
          (put ',mode 'variable-documentation ,doc))
        (make-variable-buffer-local ',mode)
+       (put ',mode 'permanent-local t)
        (when ,intercept
          (evil-make-intercept-map ,keymap))
        (when ,overriding
          (evil-make-overriding-map ,keymap))
        ,@(if local
              `((make-variable-buffer-local ',keymap)
+               (put ',keymap 'permanent-local t)
                (evil-add-to-alist 'evil-local-keymaps-alist
                                   ',mode ',keymap))
            `((evil-add-to-alist 'evil-global-keymaps-alist
@@ -951,7 +955,7 @@ If ARG is nil, don't display a message in the echo area.%s" name doc)
                (if ',input-method
                    (activate-input-method evil-input-method)
                  (inactivate-input-method))
-               (unless evil-locked-display
+               (unless evil-no-display
                  (evil-refresh-cursor ',state)
                  (evil-refresh-mode-line ',state)
                  (when (evil-called-interactively-p)
@@ -959,7 +963,7 @@ If ARG is nil, don't display a message in the echo area.%s" name doc)
                ,@body
                (run-hooks ',entry-hook)
                (when (and evil-echo-state
-                          arg (not evil-locked-display) ,message)
+                          arg (not evil-no-display) ,message)
                  (if (functionp ,message)
                      (funcall ,message)
                    (evil-echo ,message))))))))

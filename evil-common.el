@@ -407,6 +407,32 @@ This ensures that it behaves correctly in Visual state."
   "Declare COMMAND to be nonrepeatable."
   (evil-add-command-properties command :repeat 'abort))
 
+(defun evil-delimited-arguments (string &optional num)
+  "Parse STRING as a sequence of delimited arguments.
+The first non-blank character in the string is taken to be
+the delimiter. Returns a list of NUM strings."
+  (save-match-data
+    (let ((string (or string ""))
+          (count 0) (idx 0)
+          argument delim match result)
+      (when (string-match "^[[:space:]]*\\(.\\)" string)
+        (setq delim (match-string 1 string)
+              argument (format "%s\\(\\(?:[\\].\\|[^%s]\\)*\\)"
+                               (regexp-quote delim)
+                               delim))
+        (while (string-match argument string idx)
+          (setq count (1+ count))
+          (if (eq count num)
+              (setq match (substring string (match-beginning 1))
+                    idx (length string))
+            (setq match (match-string 1 string)
+                  idx (match-end 1)))
+          (unless (zerop (length match))
+            (push match result))))
+      (while (and num (< (length result) num))
+        (push nil result))
+      (nreverse result))))
+
 ;;; Key sequences
 
 (defun evil-keypress-parser (&optional input)
@@ -680,8 +706,8 @@ BUFFER defaults to the current buffer."
   "Display an unlogged message in the echo area.
 That is, the message is not logged in the *Messages* buffer.
 \(To log the message, just use `message'.)"
-  (let (message-log-max)
-    (unless evil-locked-display
+  (unless evil-no-display
+    (let (message-log-max)
       (apply 'message string args))))
 
 (defun evil-echo-area-save ()
@@ -714,12 +740,11 @@ Intermittent messages are not logged in the *Messages* buffer."
        (evil-echo-area-restore))))
 
 (defmacro evil-without-display (&rest body)
-  "Execute BODY with locked display.
-State changes will not change the cursor, refresh the mode line
-or display a message in the echo area."
+  "Execute BODY without Evil displays.
+Inhibits echo area messages, mode line updates and cursor changes."
   (declare (indent defun)
            (debug t))
-  `(let ((evil-locked-display t))
+  `(let ((evil-no-display t))
      ,@body))
 
 (defun evil-num-visible-lines ()
@@ -756,26 +781,43 @@ If POS is a marker, return its position."
    (t
     pos)))
 
-;; `set-mark' does too much at once
-(defun evil-move-mark (pos)
-  "Set buffer's mark to POS.
-If POS is nil, delete the mark."
-  (when pos
-    (setq pos (evil-normalize-position pos)))
-  (set-marker (mark-marker) pos))
-
-(defun evil-adjust-eol (&optional force)
+(defun evil-adjust-cursor (&optional force)
   "Move point one character back if at the end of a non-empty line.
-This behavior is contingent on `evil-move-cursor-back';
+This behavior is contingent on the variable `evil-move-cursor-back';
 use the FORCE parameter to override it."
-  (when (or evil-move-cursor-back force)
-    (when (eolp)
-      (evil-adjust))))
+  (when (eolp)
+    (evil-move-cursor-back force)))
 
-(defun evil-adjust ()
-  "Move point one character back within the current line."
-  (unless (bolp)
-    (backward-char)))
+(defun evil-move-cursor-back (&optional force)
+  "Move point one character back within the current line.
+Contingent on the variable `evil-move-cursor-back' or the FORCE
+argument. Honors field boundaries, i.e., constrains the movement
+to the current field as recognized by `line-beginning-position'."
+  (when (or evil-move-cursor-back force)
+    (unless (= (point) (line-beginning-position))
+      (backward-char))))
+
+(defun evil-line-position (line &optional column)
+  "Return the position of LINE.
+If COLUMN is specified, return its position on the line.
+A negative number means the end of the line."
+  (save-excursion
+    (when (fboundp 'evil-goto-line)
+      (evil-goto-line line))
+    (if (numberp column)
+        (if (< column 0)
+            (end-of-line)
+          (move-to-column column))
+      (beginning-of-line))
+    (point)))
+
+(defun evil-column (&optional pos)
+  "Return the horizontal position of POS.
+POS defaults to point."
+  (save-excursion
+    (when pos
+      (goto-char pos))
+    (current-column)))
 
 (defun evil-move-to-column (column &optional dir force)
   "Move point to column COLUMN in the current line.
@@ -786,7 +828,7 @@ is non-nil) and returns point."
   (unless force
     (when (or (not dir) (and (numberp dir) (< dir 1)))
       (when (> (current-column) column)
-        (evil-adjust))))
+        (evil-move-cursor-back))))
   (point))
 
 (defmacro evil-loop (spec &rest body)
@@ -891,7 +933,9 @@ See also `evil-goto-min'."
     (let ((opoint (point)))
       (condition-case err
           (with-no-warnings
-            (next-line count))
+            (if (>= count 0)
+                (next-line count)
+              (previous-line (- count))))
         ((beginning-of-buffer end-of-buffer)
          (let ((col (or goal-column
                         (if (consp temporary-goal-column)
@@ -977,9 +1021,9 @@ CHARS is a character set as inside [...] in a regular expression."
   "Restores the column after execution of BODY."
   (declare (indent defun)
            (debug t))
-  `(let ((ocolumn (current-column)))
+  `(let ((col (current-column)))
      ,@body
-     (move-to-column ocolumn)))
+     (move-to-column col)))
 
 (defun evil-in-regexp-p (regexp &optional pos)
   "Whether POS is inside a match for REGEXP.
@@ -1027,26 +1071,26 @@ POS defaults to the current position of point."
                  (save-excursion (beginning-of-defun) (point))
                  (point))) t)))
 
-(defun evil-find-beginning (predicate &optional pos bound)
+(defun evil-find-beginning (predicate &optional pos limit)
   "Find the beginning of a series of characters satisfying PREDICATE.
 POS is the starting point and defaults to the current position.
-Stops at BOUND, which defaults to the beginning of the buffer."
+Stops at LIMIT, which defaults to the beginning of the buffer."
   (setq pos (or pos (point))
-        bound (or bound (buffer-end -1)))
+        limit (or limit (buffer-end -1)))
   (while (let ((prev (1- pos)))
-           (when (and (>= prev bound)
+           (when (and (>= prev limit)
                       (funcall predicate prev))
              (setq pos prev))))
   pos)
 
-(defun evil-find-end (predicate &optional pos bound)
+(defun evil-find-end (predicate &optional pos limit)
   "Find the end of a series of characters satisfying PREDICATE.
 POS is the starting point and defaults to the current position.
-Stops at BOUND, which defaults to the end of the buffer."
+Stops at LIMIT, which defaults to the end of the buffer."
   (setq pos (or pos (point))
-        bound (or bound (buffer-end 1)))
+        limit (or limit (buffer-end 1)))
   (while (let ((next (1+ pos)))
-           (when (and (<= next bound)
+           (when (and (<= next limit)
                       (funcall predicate next))
              (setq pos next))))
   pos)
@@ -1102,6 +1146,21 @@ Otherwise, execute BODY again, but without the restriction."
   `(or (when (or (evil-in-comment-p) (evil-in-string-p))
          (evil-narrow-to-comment ,@body))
        (progn ,@body)))
+
+(defun evil-insert-newline-above ()
+  "Inserts a new line above point and places point in that line
+with regard to indentation."
+  (beginning-of-line)
+  (newline)
+  (forward-line -1)
+  (back-to-indentation))
+
+(defun evil-insert-newline-below ()
+  "Inserts a new line below point and places point in that line
+with regard to indentation."
+  (end-of-line)
+  (newline)
+  (back-to-indentation))
 
 ;;; Markers
 
@@ -1238,6 +1297,14 @@ Signal an error if empty, unless NOERROR is non-nil."
 
 ;;; Region
 
+;; `set-mark' does too much at once
+(defun evil-move-mark (pos)
+  "Set buffer's mark to POS.
+If POS is nil, delete the mark."
+  (when pos
+    (setq pos (evil-normalize-position pos)))
+  (set-marker (mark-marker) pos))
+
 (defun evil-transient-save ()
   "Save Transient Mark mode and make the new setup buffer-local.
 The variables to save are listed in `evil-transient-vars'.
@@ -1348,10 +1415,8 @@ each line. Extra arguments to FUNC may be passed via ARGS."
     (save-excursion
       (evil-sort beg end)
       ;; calculate columns
-      (goto-char end)
-      (setq right (current-column))
-      (goto-char beg)
-      (setq left (current-column))
+      (setq left  (evil-column beg)
+            right (evil-column end))
       ;; ensure LEFT < RIGHT
       (when (> left right)
         (evil-sort left right)
@@ -1488,16 +1553,10 @@ each line. Extra arguments to FUNC may be passed via ARGS."
           (newline))
         (setq current-line (1+ current-line))
         ;; insert text unless we insert an empty line behind eol
-        (unless (and (< (save-excursion
-                          (goto-char (line-end-position))
-                          (current-column))
-                        col)                ; nothing in this line
-                     (zerop (length text))) ; and nothing to insert
+        (unless (and (< (evil-column (line-end-position)) col)
+                     (zerop (length text)))
           ;; if we paste behind eol, it may be sufficient to insert tabs
-          (if (< (save-excursion
-                   (goto-char (line-end-position))
-                   (current-column))
-                 col)
+          (if (< (evil-column (line-end-position)) col)
               (move-to-column (+ col begextra) t)
             (move-to-column col t)
             (insert (make-string begextra ? )))
@@ -2253,22 +2312,108 @@ in `evil-temporary-undo' instead."
           (setq evil-temporary-undo nil)
         (setq buffer-undo-list undo-list)))))
 
-;;; Highlighting
+;;; Substitute
 
-(when (fboundp 'font-lock-add-keywords)
-  (font-lock-add-keywords
-   'emacs-lisp-mode
-   ;; Match all `evil-define-' forms except `evil-define-key'.
-   ;; (In the interests of speed, this expression is incomplete
-   ;; and does not match all three-letter words.)
-   '(("(\\(evil-\\(?:ex-\\)?define-\\(?:[^ k][^ e][^ y]\\|[-[:word:]]\\{4,\\}\\)\\)\
-\\>[ \f\t\n\r\v]*\\(\\sw+\\)?"
-      (1 font-lock-keyword-face)
-      (2 font-lock-function-name-face nil t))
-     ("(\\(evil-\\(?:narrow\\|save\\|with\\(?:out\\)?\\)-[-[:word:]]+\\)\\>"
-      1 font-lock-keyword-face)
-     ("(\\(evil-\\(?:[-[:word:]]\\)*loop\\)\\>"
-      1 font-lock-keyword-face))))
+(defun evil-downcase-first (str)
+  "Return STR with the first letter downcased."
+  (if (zerop (length str))
+      str
+    (concat (downcase (substring str 0 1))
+            (substring str 1))))
+
+(defun evil-upcase-first (str)
+  "Return STR with the first letter upcased."
+  (if (zerop (length str))
+      str
+    (concat (upcase (substring str 0 1))
+            (substring str 1))))
+
+(defun evil-compile-subreplacement (to)
+  "Maybe convert a regexp replacement TO to Lisp from START until \e or \E.
+Returns a pair (result . rest).  RESULT is a list suitable for
+`perform-replace' if necessary, the original string if not and
+REST is the unparsed rest of TO."
+  (if (string-match "\\(\\`\\|[^\\]\\)\\(\\\\\\\\\\)*\\\\[,#ntrlLuUeE]" to)
+      (let (pos list char (rest ""))
+        (while
+            (progn
+              (setq pos (match-end 0))
+              (push (substring to 0 (- pos 2)) list)
+              (setq char (aref to (1- pos))
+                    to (substring to pos))
+              (cond ((eq char ?\#)
+                     (push '(number-to-string replace-count) list))
+                    ((eq char ?n) (push "\n" list))
+                    ((eq char ?t) (push "\t" list))
+                    ((eq char ?r) (push "\r" list))
+                    ((memq char '(?e ?E))
+                     (setq rest to to ""))
+                    ((memq char '(?l ?L ?u ?U))
+                     (let ((func (cdr (assoc char '((?l . evil-downcase-first)
+                                                    (?L . downcase)
+                                                    (?u . evil-upcase-first)
+                                                    (?U . upcase))))))
+                       (let ((result (evil-compile-subreplacement to)))
+                         (push `(,func
+                                 (replace-quote
+                                  (evil-match-substitute-replacement
+                                   ,(car result) t)))
+                               list)
+                         (setq to (cdr result)))))
+                    ((eq char ?\,)
+                     (setq pos (read-from-string to))
+                     (push `(replace-quote ,(car pos)) list)
+                     (let ((end
+                            ;; Swallow a space after a symbol
+                            ;; if there is a space.
+                            (if (and (or (symbolp (car pos))
+                                         ;; Swallow a space after 'foo
+                                         ;; but not after (quote foo).
+                                         (and (eq (car-safe (car pos)) 'quote)
+                                              (not (= ?\( (aref to 0)))))
+                                     (eq (string-match " " to (cdr pos))
+                                         (cdr pos)))
+                                (1+ (cdr pos))
+                              (cdr pos))))
+                       (setq to (substring to end)))))
+              (string-match "\\(\\`\\|[^\\]\\)\\(\\\\\\\\\\)*\\\\[,#ntrlLuUeE]" to)))
+        (setq to (nreverse (delete "" (cons to list))))
+        (replace-match-string-symbols to)
+        (cons (if (cdr to)
+                  (cons 'concat to)
+                (car to))
+              rest))
+    (cons to "")))
+
+(defun evil-compile-replacement (to)
+  "Maybe convert a regexp replacement TO to Lisp.
+Returns a list suitable for `perform-replace' if necessary,
+the original string if not."
+  (when (stringp to)
+    (save-match-data
+      (cons 'replace-eval-replacement
+            (car (evil-compile-subreplacement to))))))
+
+(defun evil-replace-match (replacement &optional fixedcase string)
+  "Replace text match by last search with REPLACEMENT.
+If REPLACEMENT is an expression it will be evaluated to compute
+the replacement text, otherwise the function behaves as
+`replace-match'."
+  (if (stringp replacement)
+      (replace-match replacement fixedcase nil string)
+    (replace-match (funcall (car replacement)
+                            (cdr replacement)
+                            0)
+                   fixedcase nil string)))
+
+(defun evil-match-substitute-replacement (replacement &optional fixedcase string)
+  "Return REPLACEMENT as it will be inserted by `evil-replace-match'."
+  (if (stringp replacement)
+      (match-substitute-replacement replacement fixedcase nil string)
+    (match-substitute-replacement (funcall (car replacement)
+                                           (cdr replacement)
+                                           0)
+                                  fixedcase nil string)))
 
 (provide 'evil-common)
 

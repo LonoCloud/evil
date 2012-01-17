@@ -2,6 +2,7 @@
 
 (require 'evil-common)
 (require 'evil-states)
+(require 'evil-repeat)
 
 (defun evil-motion-range (motion &optional count type)
   "Execute a motion and return the buffer positions.
@@ -16,14 +17,24 @@ The return value is a list (BEG END TYPE)."
       (evil-transient-mark 1)
       (unwind-protect
           (let ((current-prefix-arg count)
-                ;; Store the type in global variable `evil-this-type'.
-                ;; Motions can change their type during execution
-                ;; by setting this variable.
-                (evil-this-type (or type
-                                    (evil-type motion 'exclusive))))
+                ;; Store type in the global variable `evil-this-type'.
+                ;; If necessary, motions can change their type
+                ;; during execution by setting this variable.
+                (evil-this-type
+                 (or type (evil-type motion 'exclusive))))
             (condition-case err
-                (setq range (call-interactively motion))
+                (let ((repeat-type (evil-repeat-type motion t)))
+                  (if (functionp repeat-type)
+                      (funcall repeat-type 'pre))
+                  (unless (with-local-quit
+                            (setq range (call-interactively motion))
+                            t)
+                    (evil-repeat-abort)
+                    (setq quit-flag t))
+                  (if (functionp repeat-type)
+                      (funcall repeat-type 'post)))
               (error (prog1 nil
+                       (evil-repeat-abort)
                        (setq evil-this-type 'exclusive
                              evil-write-echo-area t)
                        (message (error-message-string err)))))
@@ -78,6 +89,7 @@ The return value is a list (BEG END TYPE)."
                    (stringp (car-safe body))))
       (setq doc (pop body)))
     ;; collect keywords
+    (setq keys (plist-put keys :repeat 'motion))
     (while (keywordp (car-safe body))
       (setq key (pop body)
             arg (pop body)
@@ -99,7 +111,6 @@ The return value is a list (BEG END TYPE)."
          ,@(when doc `(,doc))          ; avoid nil before `interactive'
          ,@keys
          :keep-visual t
-         :repeat motion
          (interactive
           (progn
             (when (evil-get-command-property ',motion :jump)
@@ -150,7 +161,7 @@ not be performed.
      (narrow-to-region
       (line-beginning-position)
       (if (and evil-move-cursor-back
-               (evil-normal-state-p))
+               (not (evil-operator-state-p)))
           (max (line-beginning-position)
                (1- (line-end-position)))
         (line-end-position)))
@@ -263,8 +274,9 @@ of the object; otherwise it is placed at the end of the object."
           (funcall forward 1)
           (when inclusive
             (unless (bobp) (backward-char)))
-          (when (evil-normal-state-p)
-            (evil-adjust-eol t)))))
+          (when (or (evil-normal-state-p)
+                    (evil-motion-state-p))
+            (evil-adjust-cursor t)))))
      ((> count 0)
       (when (evil-eobp)
         (signal 'end-of-buffer nil))
@@ -277,8 +289,9 @@ of the object; otherwise it is placed at the end of the object."
             (goto-char (point-max))
           (when inclusive
             (unless (bobp) (backward-char)))
-          (when (evil-normal-state-p)
-            (evil-adjust-eol t)))))
+          (when (or (evil-normal-state-p)
+                    (evil-motion-state-p))
+            (evil-adjust-cursor t)))))
      (t
       count))))
 
@@ -445,9 +458,6 @@ if COUNT is positive, and to the left of it if negative.
       (cond
        ((eq key :keep-visual)
         (setq visual arg))
-       ;; :motion nil is equivalent to :motion undefined
-       ((eq key :motion)
-        (setq keys (plist-put keys key (or arg 'undefined))))
        (t
         (setq keys (plist-put keys key arg)))))
     ;; collect `interactive' specification
@@ -465,7 +475,10 @@ if COUNT is positive, and to the left of it if negative.
        :suppress-operator t
        (interactive
         (let* ((evil-operator-range-motion
-                (evil-get-command-property ',operator :motion))
+                (when (evil-has-command-property-p ',operator :motion)
+                  ;; :motion nil is equivalent to :motion undefined
+                  (or (evil-get-command-property ',operator :motion)
+                      'undefined)))
                (evil-operator-range-type
                 (evil-get-command-property ',operator :type))
                (orig (point))
@@ -483,7 +496,7 @@ if COUNT is positive, and to the left of it if negative.
                 (when (evil-visual-state-p)
                   (evil-visual-expand-region))
               (when (evil-visual-state-p)
-                (evil-change-to-previous-state))
+                (evil-exit-visual-state))
               (when (region-active-p)
                 (evil-active-region -1)))
             (if (or (evil-get-command-property ',operator :move-point)
@@ -507,7 +520,9 @@ The return value is a list (BEG END) or (BEG END TYPE),
 depending on RETURN-TYPE. Instead of reading from the keyboard,
 a predefined motion may be specified with MOTION. Likewise,
 a predefined type may be specified with TYPE."
-  (let ((motion evil-operator-range-motion)
+  (let ((motion (or evil-operator-range-motion
+                    (when (and (fboundp 'evil-ex-p) (evil-ex-p))
+                      'evil-line)))
         (type evil-operator-range-type)
         (range (evil-range (point) (point)))
         command count modifier)
@@ -517,11 +532,10 @@ a predefined type may be specified with TYPE."
        ((evil-visual-state-p)
         (setq range (evil-visual-range)))
        ;; Ex mode
-       ((and (fboundp 'evil-ex-state-p)
-             (evil-ex-state-p)
-             evil-ex-current-range)
-        (setq range (and (fboundp 'evil-ex-range)
-                         (evil-ex-range))))
+       ((and (fboundp 'evil-ex-p)
+             (evil-ex-p)
+             evil-ex-range)
+        (setq range evil-ex-range))
        ;; active region
        ((region-active-p)
         (setq range (evil-range (region-beginning)
@@ -734,6 +748,23 @@ via KEY-VALUE pairs. BODY should evaluate to a list of values.
              (setcdr entry value)
            (push (cons code value) evil-interactive-alist))
          code))))
+
+;;; Highlighting
+
+(when (fboundp 'font-lock-add-keywords)
+  (font-lock-add-keywords
+   'emacs-lisp-mode
+   ;; Match all `evil-define-' forms except `evil-define-key'.
+   ;; (In the interests of speed, this expression is incomplete
+   ;; and does not match all three-letter words.)
+   '(("(\\(evil-\\(?:ex-\\)?define-\\(?:[^ k][^ e][^ y]\\|[-[:word:]]\\{4,\\}\\)\\)\
+\\>[ \f\t\n\r\v]*\\(\\sw+\\)?"
+      (1 font-lock-keyword-face)
+      (2 font-lock-function-name-face nil t))
+     ("(\\(evil-\\(?:narrow\\|save\\|with\\(?:out\\)?\\)-[-[:word:]]+\\)\\>"
+      1 font-lock-keyword-face)
+     ("(\\(evil-\\(?:[-[:word:]]\\)*loop\\)\\>"
+      1 font-lock-keyword-face))))
 
 (provide 'evil-macros)
 

@@ -112,7 +112,7 @@ This should be a regexp set without the enclosing []."
   :type  'integer
   :group 'evil)
 
-(defcustom evil-esc-delay 0
+(defcustom evil-esc-delay 0.01
   "Time in seconds to wait for another key after ESC."
   :type 'number
   :group 'evil)
@@ -381,6 +381,7 @@ in `evil-emacs-state-modes', `evil-insert-state-modes' or
     calendar-mode
     command-history-mode
     compilation-mode
+    dictionary-mode
     help-mode
     Info-mode
     speedbar-mode
@@ -394,6 +395,7 @@ in `evil-emacs-state-modes', `evil-insert-state-modes' or
   '((Buffer-menu-mode-map . "buff-menu")
     (comint-mode-map . comint)
     (compilation-mode-map . compile)
+    (dictionary-mode-map . dictionary)
     (speedbar-key-map . speedbar)
     (speedbar-file-key-map . speedbar)
     (speedbar-buffers-key-map . speedbar))
@@ -479,6 +481,7 @@ a keymap variable and EVAL-AFTER is the file or package defining it
     mouse-save-then-kill
     mouse-set-point
     mouse-set-region
+    mwheel-scroll
     move-beginning-of-line
     move-end-of-line
     next-error
@@ -512,17 +515,10 @@ a keymap variable and EVAL-AFTER is the file or package defining it
   :group 'evil)
 
 (defcustom evil-visual-newline-commands
-  '(cua-copy-region
-    cua-cut-region
-    cua-delete-region
-    delete-region
-    execute-extended-command
-    kill-region
-    kill-ring-save
-    org-sort)
-  "Commands requiring the trailing newline of a Visual Line selection.
-\(In most cases, it's more useful not to include this newline in
-the region acted on.)"
+  '(LaTeX-section
+    TeX-font)
+  "Commands excluding the trailing newline of a Visual Line selection.
+These commands work better without this newline."
   :type  '(repeat symbol)
   :group 'evil)
 
@@ -652,12 +648,11 @@ having higher priority.")
 Entries have the form (VARIABLE VALUE LOCAL), where LOCAL is
 whether the variable was previously buffer-local.")
 
-(defvar evil-locked-display nil
-  "If non-nil, state changes are invisible.
-Don't set this directly; use the macro
-`evil-with-locked-display' instead.")
-(make-variable-buffer-local 'evil-locked-display)
-(put 'evil-locked-display 'permanent-local t)
+(defvar evil-no-display nil
+  "If non-nil, various Evil displays are inhibited.
+Use the macro `evil-without-display' to set this variable.")
+(make-variable-buffer-local 'evil-no-display)
+(put 'evil-no-display 'permanent-local t)
 
 (defvar evil-type-properties nil
   "Specifications made by `evil-define-type'.
@@ -736,7 +731,7 @@ of `evil-inhibit-operator' from one local scope to another.")
     (?' . evil-jump-backward)
     (?` . evil-jump-backward)
     (?< . evil-visual-beginning)
-    (?> . evil-visual-end))
+    (?> . evil-visual-end-mark))
   "Association list for markers.
 Entries have the form (CHAR . DATA), where CHAR is the marker's
 name and DATA is either a marker object as returned by `make-marker',
@@ -923,12 +918,6 @@ This is a selection as defined by `evil-define-visual-selection'.")
 (make-variable-buffer-local 'evil-visual-selection)
 (put 'evil-visual-selection 'permanent-local t)
 
-(defvar evil-visual-type nil
-  "The type of the Visual selection.
-This is a type as defined by `evil-define-type'.")
-(make-variable-buffer-local 'evil-visual-type)
-(put 'evil-visual-type 'permanent-local t)
-
 ;; we could infer the direction by comparing `evil-visual-mark'
 ;; and `evil-visual-point', but destructive operations may
 ;; displace the markers
@@ -970,51 +959,55 @@ They are reused to minimize flicker.")
   "Association list of Visual selection functions.
 Elements have the form (NAME . FUNCTION).")
 
-;;; ex-mode
+;;; Ex
 
-(defvar evil-ex-minibuffer nil
-  "The currently active ex minibuffer.")
+(defvar evil-ex-map (make-sparse-keymap)
+  "Keymap for Ex.
+Key sequences bound in this map are immediately executed.")
 
-(defvar evil-ex-current-buffer nil
-  "The buffer from which the current ex-mode has been started.")
-
-(defvar evil-ex-last-cmd nil
-  "The previously executed command.")
-
-(defvar evil-ex-current-cmd nil
-  "The currently parsed command.")
-
-(defvar evil-ex-current-cmd-begin nil
-  "The begin-position of the currently parsed command.")
-
-(defvar evil-ex-current-cmd-end nil
-  "The end-position of the currently parsed command.")
-
-(defvar evil-ex-current-cmd-force nil
-  "The force argument of the currently parsed command.")
-
-(defvar evil-ex-current-arg nil
-  "The currently parsed argument.")
-
-(defvar evil-ex-current-range nil
-  "The currenty parsed range.")
-
-(defvar evil-ex-history nil
-  "History of ex-commands.")
-
-(defvar evil-ex-keymap (make-sparse-keymap)
-  "Keymap used in ex-mode.")
-(set-keymap-parent evil-ex-keymap minibuffer-local-completion-map)
-(define-key evil-ex-keymap (kbd "SPC") #'self-insert-command)
+(defvar evil-ex-completion-map (make-sparse-keymap)
+  "Completion keymap for Ex.")
+(set-keymap-parent evil-ex-completion-map minibuffer-local-completion-map)
+(define-key evil-ex-completion-map (kbd "SPC") #'self-insert-command)
 
 (defvar evil-ex-commands nil
-  "An alist of command-bindings to functions.")
+  "Association list of command bindings and functions.")
 
-(defvar evil-ex-current-arg-handler nil
-  "Currently active argument handler depending on current command.")
+(defvar evil-ex-history nil
+  "History of Ex commands.")
 
-(defvar evil-ex-arg-types-alist nil
-  "An alist of defined argument handlers.")
+(defvar evil-ex-current-buffer nil
+  "The buffer from which Ex was started.")
+
+(defvar evil-ex-expression nil
+  "The evaluation tree.")
+
+(defvar evil-ex-tree nil
+  "The syntax tree.")
+
+(defvar evil-ex-command nil
+  "The current Ex command.")
+
+(defvar evil-ex-previous-command nil
+  "The previously executed Ex command.")
+
+(defvar evil-ex-range nil
+  "The current range of the Ex command.")
+
+(defvar evil-ex-force nil
+  "The \"!\" argument of the current Ex command.")
+
+(defvar evil-ex-argument nil
+  "The current argument of the Ex command.")
+
+(defvar evil-ex-argument-handler nil
+  "The argument handler for the current Ex command.")
+
+(defvar evil-ex-argument-types nil
+  "Association list of argument handlers.")
+
+(defvar evil-previous-shell-command nil
+  "The last shell command.")
 
 ;; Searching
 (defvar evil-ex-search-history nil
@@ -1034,6 +1027,9 @@ Elements have the form (NAME . FUNCTION).")
 
 (defvar evil-ex-search-pattern nil
   "The actual search pattern.")
+
+(defvar evil-ex-search-offset nil
+  "The actual search offset.")
 
 (defvar evil-ex-search-match-beg nil
   "The beginning position of the last match.")
