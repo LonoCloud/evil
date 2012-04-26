@@ -10,16 +10,16 @@
 
 ;; Movement commands, or motions, are defined with the macro
 ;; `evil-define-motion'. A motion is a command with an optional
-;; argument COUNT (accessed with the special interactive code "<c>").
+;; argument COUNT (interactively accessed by the code "<c>").
 ;; It may specify the :type command property (e.g., :type line),
 ;; which determines how it is handled by an operator command.
 ;; Furthermore, the command must have the command properties
 ;; :keep-visual t and :repeat motion; these are automatically
-;; handled by the `evil-define-motion' macro.
+;; set by the `evil-define-motion' macro.
 
 (evil-define-motion evil-forward-char (count &optional crosslines noerror)
   "Move cursor to the right by COUNT characters.
-Movement is restricted to current line unless CROSSLINES is non-nil.
+Movement is restricted to the current line unless CROSSLINES is non-nil.
 If NOERROR is non-nil, don't signal an error upon reaching the end
 of the line or the buffer; just return nil."
   :type exclusive
@@ -51,7 +51,7 @@ of the line or the buffer; just return nil."
 
 (evil-define-motion evil-backward-char (count &optional crosslines noerror)
   "Move cursor to the left by COUNT characters.
-Movement is restricted to current line unless CROSSLINES is non-nil.
+Movement is restricted to the current line unless CROSSLINES is non-nil.
 If NOERROR is non-nil, don't signal an error upon reaching the beginning
 of the line or the buffer; just return nil."
   :type exclusive
@@ -2048,8 +2048,10 @@ See also `evil-open-fold'."
 
 (evil-define-operator evil-write (beg end type filename &optional bang)
   "Save the current buffer, from BEG to END, to FILENAME.
-If the file already exists and the BANG argument is non-nil,
-it is overwritten without confirmation."
+The current buffer's filename is not changed unless it has no
+associated file and no region is specified.  If the file already
+exists and the BANG argument is non-nil, it is overwritten
+without confirmation."
   :motion nil
   :move-point nil
   :type line
@@ -2060,12 +2062,17 @@ it is overwritten without confirmation."
   (cond
    ((zerop (length filename))
     (error "Please specify a file name for the buffer"))
+   ;; with region always save to file without reseting modified flag
    ((and beg end)
     (write-region beg end filename nil nil nil (not bang)))
-   ((and (not bang) (string= filename (or (buffer-file-name) "")))
-    (save-buffer))
+   ;; save current buffer to its file
+   ((string= filename (or (buffer-file-name) ""))
+    (if (not bang) (save-buffer) (write-file filename)))
+   ;; save to other file
    (t
-    (write-file filename (not bang)))))
+    (write-region nil nil filename
+                  nil (not (buffer-file-name)) nil
+                  (not bang)))))
 
 (evil-define-command evil-write-all (bang)
   "Saves all buffers."
@@ -2074,14 +2081,16 @@ it is overwritten without confirmation."
   (interactive "<!>")
   (save-some-buffers bang))
 
-(evil-define-command evil-save (file &optional bang)
-  "Save the current buffer to FILE.
-Changes the file name of the current buffer to this name.
-If no FILE is given, the current file name is used."
+(evil-define-command evil-save (filename &optional bang)
+  "Save the current buffer to FILENAME.
+Changes the file name of the current buffer to FILENAME.  If no
+FILENAME is given, the current file name is used."
   :repeat nil
   :move-point nil
   (interactive "<f><!>")
-  (evil-write nil nil nil file bang))
+  (when (zerop (length filename))
+    (setq filename (buffer-file-name)))
+  (write-file filename (not bang)))
 
 (evil-define-command evil-edit (file &optional bang)
   "Open FILE.
@@ -2154,7 +2163,10 @@ Create new buffer? " buffer)))
   (interactive "<b><!>")
   (with-current-buffer (or buffer (current-buffer))
     (when bang
-      (set-buffer-modified-p nil))
+      (set-buffer-modified-p nil)
+      (dolist (process (process-list))
+        (when (eq (process-buffer process) (current-buffer))
+          (set-process-query-on-exit-flag process nil))))
     ;; if the buffer which was initiated by emacsclient,
     ;; call `server-edit' from server.el to avoid
     ;; "Buffer still has clients" message
@@ -2165,34 +2177,39 @@ Create new buffer? " buffer)))
       (kill-buffer nil))))
 
 (evil-define-command evil-quit (&optional bang)
-  "Closes the current window, exits Emacs if this is the last window."
+  "Closes the current window, current frame, Emacs.
+If the current frame belongs to some client the client connection
+is closed."
   :repeat nil
   (interactive "<!>")
   (condition-case nil
       (delete-window)
     (error
      (condition-case nil
-         (delete-frame)
+         (let ((proc (frame-parameter (selected-frame) 'client)))
+           (if proc
+               (evil-quit-all bang)
+             (delete-frame)))
        (error
-        (if (null bang)
-            (save-buffers-kill-emacs)
-          (dolist (process (process-list))
-            (set-process-query-on-exit-flag process nil))
-          (kill-emacs)))))))
+        (evil-quit-all bang))))))
 
 (evil-define-command evil-quit-all (&optional bang)
   "Exits Emacs, asking for saving."
   :repeat nil
   (interactive "<!>")
   (if (null bang)
-      (save-buffers-kill-emacs)
-    (dolist (process (process-list))
-      (set-process-query-on-exit-flag process nil))
-    (kill-emacs)))
+      (save-buffers-kill-terminal)
+    (let ((proc (frame-parameter (selected-frame) 'client)))
+      (if proc
+          (with-no-warnings
+            (server-delete-client proc))
+        (dolist (process (process-list))
+          (set-process-query-on-exit-flag process nil))
+        (kill-emacs)))))
 
 (evil-define-command evil-save-and-quit ()
   "Exits Emacs, without saving."
-  (save-buffers-kill-emacs 1))
+  (save-buffers-kill-terminal t))
 
 (evil-define-command evil-save-and-close (file &optional bang)
   "Saves the current buffer and closes the window."

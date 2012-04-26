@@ -69,6 +69,12 @@
   (let (evil-esc-mode)
     ad-do-it))
 
+;; etags-select
+;; FIXME: probably etags-select should be recomended in docs
+(eval-after-load 'etags-select
+  '(progn
+     (define-key evil-motion-state-map "g]" 'etags-select-find-tag-at-point)))
+
 ;;; Buffer-menu
 
 (evil-add-hjkl-bindings Buffer-menu-mode-map 'motion)
@@ -102,6 +108,10 @@
 (eval-after-load 'elp
   '(defadvice elp-results (after evil activate)
      (evil-motion-state)))
+
+;;; ERT
+
+(evil-add-hjkl-bindings ert-results-mode-map 'motion)
 
 ;;; Info
 
