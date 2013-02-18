@@ -1943,33 +1943,35 @@ next VCOUNT - 1 lines below the current one."
                    vcount)))
   (evil-insert-state 1))
 
-(defun evil-insert-digraph (count digraph)
-  "Insert COUNT digraphs DIGRAPH."
-  (interactive
-   (let (count char1 char2 overlay string)
-     (unwind-protect
-         (progn
-           (setq count (prefix-numeric-value current-prefix-arg)
-                 overlay (make-overlay (point) (point)))
-           ;; create overlay prompt
-           (setq string "?")
-           (put-text-property 0 1 'face 'minibuffer-prompt string)
-           ;; put cursor at (i.e., right before) the prompt
-           (put-text-property 0 1 'cursor t string)
-           (overlay-put overlay 'after-string string)
-           (setq char1 (evil-read-key))
-           (setq string (string char1))
-           (put-text-property 0 1 'face 'minibuffer-prompt string)
-           (put-text-property 0 1 'cursor t string)
-           (overlay-put overlay 'after-string string)
-           (setq char2 (evil-read-key)))
-       (delete-overlay overlay))
-     (list count (list char1 char2))))
-  (let ((digraph (or (evil-digraph digraph)
-                     ;; use the last character if undefined
-                     (cadr digraph))))
-    (dotimes (var count)
-      (insert digraph))))
+(evil-define-command evil-insert-digraph (count)
+  "Insert COUNT digraphs."
+  (interactive "p")
+  (let ((digraph (evil-read-digraph-char 0)))
+    (insert-char digraph count)))
+
+(defun evil-ex-show-digraphs ()
+  "Shows a list of all available digraphs."
+  (interactive)
+  (let ((buf (get-buffer-create "*evil-digraphs*"))
+        (inhibit-read-only t))
+    (with-current-buffer buf
+      (erase-buffer)
+      (let ((i 0)
+            (digraphs
+             (mapcar #'(lambda (digraph)
+                         (cons (cdr digraph)
+                               (car digraph)))
+                     (append evil-digraphs-table
+                             evil-digraphs-table-user))))
+        (dolist (digraph digraphs)
+          (insert (nth 0 digraph) "\t"
+                  (nth 1 digraph) " "
+                  (nth 2 digraph)
+                  (if (= i 2) "\n" "\t\t"))
+          (setq i (mod (1+ i) 3))))
+      (goto-char (point-min))
+      (view-buffer buf #'kill-buffer)
+      (evil-emacs-state))))
 
 (defun evil-copy-from-above (arg)
   "Copy characters from preceding non-blank line.
@@ -2584,7 +2586,8 @@ Change to `%s'? "
   "Goes to the next occurrence."
   :jump t
   :type exclusive
-  (setq evil-ex-search-start-point (point))
+  (setq evil-ex-search-start-point (point)
+        evil-ex-last-was-search t)
   (let ((orig (point))
         wrapped)
     (dotimes (i (or count 1))
@@ -2687,6 +2690,7 @@ resp.  after executing the command."
     (error "No pattern given"))
   (unless replacement
     (error "No replacement given"))
+  (setq evil-ex-last-was-search nil)
   (let* ((flags (append flags nil))
          (confirm (memq ?c flags))
          (case-fold-search (eq (evil-ex-pattern-case-fold pattern)
@@ -2901,6 +2905,38 @@ This is the same as :%s//~/&"
   :move-point nil
   (interactive "<r><g/><!>")
   (evil-ex-global beg end pattern command (not invert)))
+
+(evil-define-operator evil-ex-normal (beg end commands)
+  "The Ex normal command.
+Execute the argument as normal command on each line in the
+range. The given argument is passed straight to
+`execute-kbd-macro'.  The default is the current line."
+  :motion evil-line
+  (interactive "<r><a>")
+  (evil-with-single-undo
+    (let (markers evil-ex-current-buffer prefix-arg current-prefix-arg)
+      (goto-char beg)
+      (while
+          (and (< (point) end)
+               (progn
+                 (push (move-marker (make-marker) (line-beginning-position))
+                       markers)
+                 (and (= (forward-line) 0) (bolp)))))
+      (setq markers (nreverse markers))
+      (deactivate-mark)
+      (evil-force-normal-state)
+      ;; replace ^[ by escape
+      (setq commands
+            (vconcat
+             (mapcar #'(lambda (ch) (if (equal ch ?) 'escape ch))
+                     (append commands nil))))
+      (dolist (marker markers)
+        (goto-char marker)
+        (condition-case nil
+            (execute-kbd-macro commands)
+          (error nil))
+        (evil-force-normal-state)
+        (set-marker marker nil)))))
 
 (evil-define-command evil-goto-char (position)
   "Go to POSITION in the buffer.

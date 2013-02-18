@@ -1283,8 +1283,6 @@ Key sequences bound in this map are immediately executed.")
 
 (defvar evil-ex-completion-map (make-sparse-keymap)
   "Completion keymap for Ex.")
-(set-keymap-parent evil-ex-completion-map minibuffer-local-completion-map)
-(define-key evil-ex-completion-map (kbd "SPC") #'self-insert-command)
 
 (defvar evil-ex-shell-argument-initialized nil
   "This variable is set to t if shell command completion has been initialized.
@@ -1368,6 +1366,10 @@ See `evil-ex-init-shell-argument-completion'.")
 
 (defvar evil-ex-substitute-current-replacement nil
   "The actual replacement.")
+
+(defvar evil-ex-last-was-search nil
+  "Non-nil if the previous was a search.
+Otherwise the previous command is assumed as substitute.")
 
 ;; The lazy-highlighting framework.
 (evil-define-local-var evil-ex-active-highlights-alist nil
