@@ -1111,6 +1111,13 @@ If nil, KEYS is used."
     "[5]; This buffer is for notes you don't want to save"
     ("3rX")
     "XX[X]This buffer is for notes you don't want to save")
+  (ert-info ("Replace digraph")
+    (evil-test-buffer
+      "[;]; This buffer is for notes you don't want to save"
+      ("re'")
+      "[é]; This buffer is for notes you don't want to save"
+      ("3rc*")
+      "ξξ[ξ]This buffer is for notes you don't want to save"))
   (ert-info ("Replacing \\n should insert only one newline")
     (evil-test-buffer
       "(setq var xxx [y]yy zzz)\n"
@@ -2667,11 +2674,13 @@ This bufferThis bufferThis buffe[r];; and for Lisp evaluation."))
       "line [1]line 1\nline 2\nline 3\n"
       ("\"a2yy\"aP")
       "[l]ine 1line 1\nline 2\nline 1line 1\nline 2\nline 3\n"))
-  (ert-info ("special register /")
-    (evil-test-buffer
-      "[f]oo bar\n"
-      ("/bar\n0i\C-r/")
-      "bar[f]oo bar\n"))
+  (dolist (module '(evil-search isearch))
+    (evil-select-search-module 'evil-search-module module)
+    (ert-info ((format "special register / (module: %s)" module))
+      (evil-test-buffer
+        "[f]oo bar\n"
+        ("/bar" [return] "0i\C-r/")
+        "bar[f]oo bar\n")))
   (ert-info ("special register :")
     (evil-test-buffer
       "[f]oo bar\n"
@@ -6583,12 +6592,19 @@ if no previous selection")
   "Test `evil-ex-substitute' with repeating of previous substitutions."
   :tags '(evil ex search)
   (ert-info ("Repeat previous pattern")
+    (evil-select-search-module 'evil-search-module 'evil-search)
     (evil-test-buffer
       "[x]xx foo bar foo bar foo bar"
       (":s/foo/AAA" [return])
       "[x]xx AAA bar foo bar foo bar"
       (":s//BBB" [return])
-      "[x]xx AAA bar BBB bar foo bar"))
+      "[x]xx AAA bar BBB bar foo bar"
+      ("/bar" [return] ":s//CCC" [return])
+      "[x]xx AAA CCC BBB bar foo bar"
+      (":s/ar/XX" [return])
+      "[x]xx AAA CCC BBB bXX foo bar"
+      (":s//YY" [return])
+      "[x]xx AAA CCC BBB bXX foo bYY"))
   (ert-info ("Repeat previous replacement")
     (evil-test-buffer
       "[x]xx foo bar foo bar foo bar"
@@ -6604,12 +6620,15 @@ if no previous selection")
       (":s/bar/BBB/&" [return])
       "[x]xx AAA BBB AAA BBB AAA BBB"))
   (ert-info ("Repeat previous substitute without flags")
+    (evil-select-search-module 'evil-search-module 'evil-search)
     (evil-test-buffer
       "[x]xx foo bar foo bar foo bar\nxxx foo bar foo bar foo bar"
       (":s/foo/AAA/g" [return])
       "[x]xx AAA bar AAA bar AAA bar\nxxx foo bar foo bar foo bar"
       ("j:s" [return])
-      "xxx AAA bar AAA bar AAA bar\n[x]xx AAA bar foo bar foo bar")
+      "xxx AAA bar AAA bar AAA bar\n[x]xx AAA bar foo bar foo bar"
+      ("/bar" [return] ":s" [return])
+      "xxx AAA bar AAA bar AAA bar\n[x]xx AAA bar AAA bar foo bar")
     (evil-test-buffer
       "[x]xx foo bar foo bar foo bar\nxxx foo bar foo bar foo bar"
       (":s/foo/AAA/g" [return])
@@ -6864,7 +6883,7 @@ if no previous selection")
   "Test search for symbol under point."
   :tags '(evil ex search)
   (evil-without-display
-    (evil-select-search-module 'evil-search-modue 'evil-search)
+    (evil-select-search-module 'evil-search-module 'evil-search)
     (setq evil-ex-search-history nil)
     (evil-test-buffer
       "so[m]e text with a strange word
@@ -6885,7 +6904,51 @@ maybe we need one line more with [s]ome text\n"
 and here some other stuff
 maybe we need one line more with some text\n"
       (ert-info ("Search history with double pattern")
-        (should (equal evil-ex-search-history '("\\_<some\\_>")))))))
+        (should (equal evil-ex-search-history '("\\_<some\\_>")))))
+    (ert-info ("Test unbounded search")
+      (evil-select-search-module 'evil-search-module 'evil-search)
+      (setq evil-ex-search-history nil)
+      (evil-test-buffer
+        "[s]ymbol\n(defun my-symbol-func ())\n(defvar my-symbol-var)\nanother symbol\n"
+        ("*")
+        "symbol\n(defun my-symbol-func ())\n(defvar my-symbol-var)\nanother [s]ymbol\n"
+        ("ggg*")
+        "symbol\n(defun my-[s]ymbol-func ())\n(defvar my-symbol-var)\nanother symbol\n"
+        (should (equal evil-ex-search-history '("symbol" "\\_<symbol\\_>")))
+        ("n")
+        "symbol\n(defun my-symbol-func ())\n(defvar my-[s]ymbol-var)\nanother symbol\n"))))
+
+(ert-deftest evil-test-isearch-symbol ()
+  "Test isearch for symbol under point."
+  :tags '(evil isearch)
+  (evil-without-display
+    (evil-select-search-module 'evil-search-module 'isearch)
+    (evil-test-buffer
+      "so[m]e text with a strange word
+and here some other stuff
+maybe we need one line more with some text\n"
+      ("*")
+      "some text with a strange word
+and here [s]ome other stuff
+maybe we need one line more with some text\n"
+      ("n")
+      "some text with a strange word
+and here some other stuff
+maybe we need one line more with [s]ome text\n"
+      ("*")
+      "[s]ome text with a strange word
+and here some other stuff
+maybe we need one line more with some text\n")
+    (ert-info ("Test unbounded search")
+      (evil-select-search-module 'evil-search-module 'isearch)
+      (evil-test-buffer
+        "[s]ymbol\n(defun my-symbol-func ())\n(defvar my-symbol-var)\nanother symbol\n"
+        ("*")
+        "symbol\n(defun my-symbol-func ())\n(defvar my-symbol-var)\nanother [s]ymbol\n"
+        ("ggg*")
+        "symbol\n(defun my-[s]ymbol-func ())\n(defvar my-symbol-var)\nanother symbol\n"
+        ("n")
+        "symbol\n(defun my-symbol-func ())\n(defvar my-[s]ymbol-var)\nanother symbol\n"))))
 
 (ert-deftest evil-test-read ()
   "Test of `evil-read'"
@@ -6956,6 +7019,17 @@ maybe we need one line more with some text\n"
       "[n]o 1\nno 2\nno 3\nyes 4\nno 5\nno 6\nno 7\n"
       (":g/no/s/[3-6]/x" [return])
       "no 1\nno 2\nno x\nyes 4\nno x\nno x\n[n]o 7\n")))
+
+(ert-deftest evil-test-normal ()
+  "Test `evil-ex-normal'."
+  (evil-test-buffer
+    "[l]ine 1\nline 2\nline 3\nline 4\nline 5\n"
+    (":normal lxIABC" [escape] "AXYZ" [return])
+    "ABClne 1XY[Z]\nline 2\nline 3\nline 4\nline 5\n"
+    (":3,4normal lxIABC" [escape] "AXYZ" [return])
+    "ABClne 1XYZ\nline 2\nABClne 3XYZ\nABClne 4XY[Z]\nline 5\n"
+    ("u")
+    "ABClne 1XYZ\nline 2\nl[i]ne 3\nline 4\nline 5\n"))
 
 ;;; Utilities
 
