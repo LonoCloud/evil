@@ -7,11 +7,13 @@
 ;;      Frank Fischer <frank.fischer at mathematik.tu-chemnitz.de>
 ;;      Frank Terbeck <ft at bewatermyfriend.org>
 ;;      Jonathan Claggett <jclaggett at lonocloud.com>
+;;      Lars Andersen <mrgrandmother at gmail.com>
 ;;      Marian Schubert <maio@netsafe.cz>
 ;;      Michael Markert <markert.michael at googlemail.com>
 ;;      Nikolai Weibull <now at bitwi.se>
 ;;      Sanel Zukan <sanelz at gmail.com>
 ;;      Simon Hafner <hafnersimon at gmail.com>
+;;      Stefan Wehr <mail at stefanwehr.de>
 ;;      Sune Simonsen <sune.simonsen at jayway.com>
 ;;      Thomas Hisch <thomas at opentech.at>
 ;;      Ulrich Müller <ulm at gentoo.org>
@@ -24,7 +26,7 @@
 ;;      To get in touch, please use the bug tracker or the
 ;;      mailing list (see below).
 ;; Created: 2011-03-01
-;; Version: 1.0.3
+;; Version: 1.0-dev
 ;; Keywords: emulation, vim
 ;; URL: http://gitorious.org/evil
 ;;      Repository: git://gitorious.org/evil/evil.git

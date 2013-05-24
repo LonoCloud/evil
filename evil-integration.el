@@ -3,7 +3,7 @@
 ;; Author: Vegard Øye <vegard_oye at hotmail.com>
 ;; Maintainer: Vegard Øye <vegard_oye at hotmail.com>
 
-;; Version: 1.0.3
+;; Version: 1.0-dev
 
 ;;
 ;; This file is NOT part of GNU Emacs.
@@ -73,23 +73,6 @@
 (evil-declare-insert-at-point-repeat 'mouse-yank-secondary)
 
 ;;; key-binding
-
-;; disable evil-esc-mode during a call to key-binding
-(defadvice key-binding (around evil activate)
-  (let (evil-esc-mode)
-    ad-do-it))
-
-;; disable evil-esc-mode during the read of a key-sequence
-;; TODO: should we handle the special ESC-delay, too?
-(defadvice read-key-sequence (around evil activate)
-  (let (evil-esc-mode)
-    ad-do-it))
-
-;; disable evil-esc-mode during the read of a key-sequence
-;; TODO: should we handle the special ESC-delay, too?
-(defadvice read-key-sequence-vector (around evil activate)
-  (let (evil-esc-mode)
-    ad-do-it))
 
 ;; Calling `keyboard-quit' should cancel repeat
 (defadvice keyboard-quit (before evil activate)
@@ -282,6 +265,54 @@
 (defadvice describe-char (around evil activate)
   "Temporarily go to Emacs state"
   (evil-with-state emacs ad-do-it))
+
+(eval-after-load 'ace-jump-mode
+  '(progn
+     (defmacro evil-enclose-ace-jump-for-motion (&rest body)
+       "Enclose ace-jump to make it suitable for motions.
+This includes restricting `ace-jump-mode' to the current window,
+deactivating visual updates, saving the mark and entering `recursive-edit'."
+       `(let ((old-mark (mark))
+              (ace-jump-mode-scope 'window))
+          (remove-hook 'pre-command-hook #'evil-visual-pre-command t)
+          (remove-hook 'post-command-hook #'evil-visual-post-command t)
+          (unwind-protect
+              (progn
+                ,@body
+                (recursive-edit))
+            (if (evil-visual-state-p)
+                (progn
+                  (add-hook 'pre-command-hook #'evil-visual-pre-command nil t)
+                  (add-hook 'post-command-hook #'evil-visual-post-command nil t)
+                  (set-mark old-mark))
+              (push-mark old-mark)))))
+
+     (evil-define-motion evil-ace-jump-char-mode (count)
+       "Jump visually directly to a char using ace-jump."
+       :type exclusive
+       (evil-enclose-ace-jump-for-motion
+        (ace-jump-mode 5)))
+
+     (evil-define-motion evil-ace-jump-line-mode (count)
+       "Jump visually to the beginning of a line using ace-jump."
+       :type line
+       (evil-enclose-ace-jump-for-motion
+        (ace-jump-mode 9)))
+
+     (evil-define-motion evil-ace-jump-word-mode (count)
+       "Jump visually to the beginning of a word using ace-jump."
+       :type exclusive
+       (evil-enclose-ace-jump-for-motion
+        (ace-jump-mode 1)))
+
+     (evil-define-motion evil-ace-jump-char-to-mode (count)
+       "Jump visually to the char in front of a char using ace-jump."
+       :type exclusive
+       (evil-enclose-ace-jump-for-motion
+        (ace-jump-mode 5)
+        (forward-char -1)))
+
+     (add-hook 'ace-jump-mode-end-hook 'exit-recursive-edit)))
 
 (provide 'evil-integration)
 
