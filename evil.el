@@ -7,18 +7,21 @@
 ;;      Frank Fischer <frank.fischer at mathematik.tu-chemnitz.de>
 ;;      Frank Terbeck <ft at bewatermyfriend.org>
 ;;      Jonathan Claggett <jclaggett at lonocloud.com>
+;;      Lars Andersen <mrgrandmother at gmail.com>
+;;      Lintaro Ina <tarao.gnn at gmail.com>
 ;;      Marian Schubert <maio@netsafe.cz>
 ;;      Michael Markert <markert.michael at googlemail.com>
 ;;      Nikolai Weibull <now at bitwi.se>
 ;;      Sanel Zukan <sanelz at gmail.com>
 ;;      Simon Hafner <hafnersimon at gmail.com>
+;;      Stefan Wehr <mail at stefanwehr.de>
 ;;      Sune Simonsen <sune.simonsen at jayway.com>
 ;;      Thomas Hisch <thomas at opentech.at>
+;;      Trevor Murphy <trevor.m.murphy at gmail.com>
 ;;      Ulrich Müller <ulm at gentoo.org>
 ;;      Winfred Lu <winfred.lu@gmail.com>
 ;;      Wolfgang Jenkner <wjenkner at inode.at>
 ;;      York Zhao <yzhao at telecor.com>
-;;      Lintaro Ina <tarao.gnn at gmail.com>
 
 ;; Maintainer: Vegard Øye <vegard_oye at hotmail.com>
 ;;      To get in touch, please use the bug tracker or the

@@ -74,23 +74,6 @@
 
 ;;; key-binding
 
-;; disable evil-esc-mode during a call to key-binding
-(defadvice key-binding (around evil activate)
-  (let (evil-esc-mode)
-    ad-do-it))
-
-;; disable evil-esc-mode during the read of a key-sequence
-;; TODO: should we handle the special ESC-delay, too?
-(defadvice read-key-sequence (around evil activate)
-  (let (evil-esc-mode)
-    ad-do-it))
-
-;; disable evil-esc-mode during the read of a key-sequence
-;; TODO: should we handle the special ESC-delay, too?
-(defadvice read-key-sequence-vector (around evil activate)
-  (let (evil-esc-mode)
-    ad-do-it))
-
 ;; Calling `keyboard-quit' should cancel repeat
 (defadvice keyboard-quit (before evil activate)
   (when (fboundp 'evil-repeat-abort)
@@ -215,14 +198,14 @@
   (when evil-local-mode
     (evil-initialize-state)))
 
-(when (boundp 'undo-tree-visualizer-map)
-  (define-key undo-tree-visualizer-map [remap evil-backward-char]
+(when (boundp 'undo-tree-visualizer-mode-map)
+  (define-key undo-tree-visualizer-mode-map [remap evil-backward-char]
     'undo-tree-visualize-switch-branch-left)
-  (define-key undo-tree-visualizer-map [remap evil-forward-char]
+  (define-key undo-tree-visualizer-mode-map [remap evil-forward-char]
     'undo-tree-visualize-switch-branch-right)
-  (define-key undo-tree-visualizer-map [remap evil-next-line]
+  (define-key undo-tree-visualizer-mode-map [remap evil-next-line]
     'undo-tree-visualize-redo)
-  (define-key undo-tree-visualizer-map [remap evil-previous-line]
+  (define-key undo-tree-visualizer-mode-map [remap evil-previous-line]
     'undo-tree-visualize-undo))
 
 ;;; Auto-complete
@@ -282,6 +265,64 @@
 (defadvice describe-char (around evil activate)
   "Temporarily go to Emacs state"
   (evil-with-state emacs ad-do-it))
+
+(eval-after-load 'ace-jump-mode
+  '(progn
+     (defmacro evil-enclose-ace-jump-for-motion (&rest body)
+       "Enclose ace-jump to make it suitable for motions.
+This includes restricting `ace-jump-mode' to the current window
+in visual and operator state, deactivating visual updates, saving
+the mark and entering `recursive-edit'."
+       `(let ((old-mark (mark))
+              (ace-jump-mode-scope (if (member evil-state '(visual operator))
+                                       'window
+                                     ace-jump-mode-scope)))
+          (remove-hook 'pre-command-hook #'evil-visual-pre-command t)
+          (remove-hook 'post-command-hook #'evil-visual-post-command t)
+          (unwind-protect
+              (progn
+                ,@body
+                (add-hook 'ace-jump-mode-end-hook #'evil-ace-jump-exit-recursive-edit)
+                (recursive-edit))
+            (if (evil-visual-state-p)
+                (progn
+                  (add-hook 'pre-command-hook #'evil-visual-pre-command nil t)
+                  (add-hook 'post-command-hook #'evil-visual-post-command nil t)
+                  (set-mark old-mark))
+              (push-mark old-mark)))))
+
+     (evil-define-motion evil-ace-jump-char-mode (count)
+       "Jump visually directly to a char using ace-jump."
+       :type inclusive
+       (evil-enclose-ace-jump-for-motion
+        (call-interactively #'ace-jump-char-mode)))
+
+     (evil-define-motion evil-ace-jump-line-mode (count)
+       "Jump visually to the beginning of a line using ace-jump."
+       :type line
+       (evil-enclose-ace-jump-for-motion
+        (call-interactively #'ace-jump-line-mode)))
+
+     (evil-define-motion evil-ace-jump-word-mode (count)
+       "Jump visually to the beginning of a word using ace-jump."
+       :type exclusive
+       (evil-enclose-ace-jump-for-motion
+        (call-interactively #'ace-jump-word-mode)))
+
+     (evil-define-motion evil-ace-jump-char-to-mode (count)
+       "Jump visually to the char in front of a char using ace-jump."
+       :type exclusive
+       (evil-enclose-ace-jump-for-motion
+        (call-interactively #'ace-jump-char-mode)))
+
+     (defun evil-ace-jump-exit-recursive-edit ()
+       "Exit a recursive edit caused by an evil jump."
+       (remove-hook 'ace-jump-mode-end-hook #'evil-ace-jump-exit-recursive-edit)
+       (exit-recursive-edit))
+
+     (define-key evil-motion-state-map [remap ace-jump-char-mode] #'evil-ace-jump-char-mode)
+     (define-key evil-motion-state-map [remap ace-jump-line-mode] #'evil-ace-jump-line-mode)
+     (define-key evil-motion-state-map [remap ace-jump-word-mode] #'evil-ace-jump-word-mode)))
 
 (provide 'evil-integration)
 
