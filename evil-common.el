@@ -3168,7 +3168,7 @@ considered magic.
    (t "[][}{*+?$^]")))
 
 ;; TODO: support magic characters in patterns
-(defconst evil-replacement-magic "[eElLuU0-9&#,rnbt]"
+(defconst evil-replacement-magic "[eElLuU0-9&#,rnbt=]"
   "All magic characters in a replacement string")
 
 (defun evil-compile-subreplacement (to &optional start)
@@ -3199,8 +3199,17 @@ REST is the unparsed remainder of TO."
                   (list `(,func
                           (replace-quote
                            (evil-match-substitute-replacement
-                            ,(car result) t)))
+                            ,(car result)
+                            (not case-replace))))
                         (cdr result))))
+               ((eq char ?=)
+                (when (or (zerop (length rest))
+                          (not (eq (aref rest 0) ?@)))
+                  (error "Expected @ after \\="))
+                (when (< (length rest) 2)
+                  (error "Expected register after \\=@"))
+                (list (evil-get-register (aref rest 1))
+                      (substring rest 2)))
                ((eq char ?,)
                 (let* ((obj (read-from-string rest))
                        (result `(replace-quote ,(car obj)))

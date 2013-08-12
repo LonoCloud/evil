@@ -180,12 +180,14 @@ To enable Evil globally, do (evil-mode 1)."
   "Enable Evil in Fundamental mode."
   (if evil-mode
       (progn
-        ;; changed back by `evil-local-mode'
-        (setq-default major-mode 'turn-on-evil-mode)
+        (when (eq (default-value 'major-mode) 'fundamental-mode)
+          ;; changed back by `evil-local-mode'
+          (setq-default major-mode 'turn-on-evil-mode))
         (ad-enable-regexp "^evil")
         (ad-activate-regexp "^evil")
         (with-no-warnings (evil-esc-mode 1)))
-    (setq-default major-mode 'fundamental-mode)
+    (when (eq (default-value 'major-mode) 'turn-on-evil-mode)
+      (setq-default major-mode 'fundamental-mode))
     (ad-disable-regexp "^evil")
     (ad-update-regexp "^evil")
     (with-no-warnings (evil-esc-mode -1))))
@@ -213,10 +215,13 @@ If STATE is nil, disable all states."
           (evil-previous-state-alist (copy-tree evil-previous-state-alist))
           (evil-next-state evil-next-state)
           (old-state evil-state)
-          (inhibit-quit t))
+          (inhibit-quit t)
+          (buf (current-buffer)))
      (unwind-protect
          (progn ,@body)
-       (evil-change-state old-state))))
+       (when (buffer-live-p buf)
+         (with-current-buffer buf
+           (evil-change-state old-state))))))
 
 (defmacro evil-with-state (state &rest body)
   "Change to STATE and execute BODY without refreshing the display.
