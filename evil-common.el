@@ -1878,24 +1878,22 @@ The insertion range is stored as a pair of buffer positions in
 then the current range is modified, otherwise it is replaced by a
 new range. Compatible changes are changes that do not create a
 disjoin range."
-  (cond
-   ((zerop len)
-    ;; insertion
-    (if (and evil-current-insertion
-             (>= beg (car evil-current-insertion))
-             (<= beg (cdr evil-current-insertion)))
-        (setcdr evil-current-insertion
-                (+ (- end beg)
-                   (cdr evil-current-insertion)))
-      (setq evil-current-insertion (cons beg end))))
-   (t
-    ;; deletion of something in range is recorded
+  ;; deletion
+  (when (> len 0)
     (if (and evil-current-insertion
              (>= beg (car evil-current-insertion))
              (<= (+ beg len) (cdr evil-current-insertion)))
         (setcdr evil-current-insertion
                 (- (cdr evil-current-insertion) len))
-      (setq evil-current-insertion nil)))))
+      (setq evil-current-insertion nil)))
+  ;; insertion
+  (if (and evil-current-insertion
+           (>= beg (car evil-current-insertion))
+           (<= beg (cdr evil-current-insertion)))
+      (setcdr evil-current-insertion
+              (+ (- end beg)
+                 (cdr evil-current-insertion)))
+    (setq evil-current-insertion (cons beg end))))
 (put 'evil-track-last-insertion 'permanent-local-hook t)
 
 (defun evil-start-track-last-insertion ()
@@ -1963,7 +1961,7 @@ The tracked insertion is set to `evil-last-insertion'."
                                    #'evil-yank-block-handler)
                                lines
                                nil
-                               #'evil-delete-yanked-rectangle))
+                               'evil-delete-yanked-rectangle))
            (text (propertize (mapconcat #'identity lines "\n")
                              'yank-handler yank-handler)))
       (when register
@@ -1978,12 +1976,12 @@ The tracked insertion is set to `evil-last-insertion'."
     (remove-list-of-text-properties
      0 (length text) yank-excluded-properties text)
     (cond
-     ((eq this-command #'evil-paste-before)
+     ((eq this-command 'evil-paste-before)
       (evil-move-beginning-of-line)
       (evil-move-mark (point))
       (insert text)
       (setq evil-last-paste
-            (list #'evil-paste-before
+            (list 'evil-paste-before
                   evil-paste-count
                   opoint
                   (mark t)
@@ -1992,7 +1990,7 @@ The tracked insertion is set to `evil-last-insertion'."
       (evil-set-marker ?\] (1- (point)))
       (evil-exchange-point-and-mark)
       (back-to-indentation))
-     ((eq this-command #'evil-paste-after)
+     ((eq this-command 'evil-paste-after)
       (evil-move-end-of-line)
       (evil-move-mark (point))
       (insert "\n")
@@ -2001,7 +1999,7 @@ The tracked insertion is set to `evil-last-insertion'."
       (evil-set-marker ?\] (1- (point)))
       (delete-char -1) ; delete the last newline
       (setq evil-last-paste
-            (list #'evil-paste-after
+            (list 'evil-paste-after
                   evil-paste-count
                   opoint
                   (mark t)
@@ -2015,7 +2013,7 @@ The tracked insertion is set to `evil-last-insertion'."
 (defun evil-yank-block-handler (lines)
   "Inserts the current text as block."
   (let ((count (or evil-paste-count 1))
-        (col (if (eq this-command #'evil-paste-after)
+        (col (if (eq this-command 'evil-paste-after)
                  (1+ (current-column))
                (current-column)))
         (current-line (line-number-at-pos (point)))
@@ -2060,14 +2058,14 @@ The tracked insertion is set to `evil-last-insertion'."
     (evil-set-marker ?\[ opoint)
     (evil-set-marker ?\] (1- epoint))
     (goto-char opoint)
-    (when (and (eq this-command #'evil-paste-after)
+    (when (and (eq this-command 'evil-paste-after)
                (not (eolp)))
       (forward-char))))
 
 (defun evil-delete-yanked-rectangle (nrows ncols)
   "Special function to delete the block yanked by a previous paste command."
   (let ((opoint (point))
-        (col (if (eq last-command #'evil-paste-after)
+        (col (if (eq last-command 'evil-paste-after)
                  (1+ (current-column))
                (current-column))))
     (dotimes (i nrows)
@@ -2756,7 +2754,7 @@ use `evil-regexp-range'."
               (setq range (evil-range beg end))
               (when exclusive
                 (evil-adjust-whitespace-inside-range
-                 range (not (eq evil-this-operator #'evil-delete)))))))
+                 range (not (eq evil-this-operator 'evil-delete)))))))
           range)))))
 
 (defun evil-quote-range (count beg end type open close &optional exclusive)
