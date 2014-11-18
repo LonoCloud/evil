@@ -153,9 +153,11 @@ it is taken to be a buffer description as passed to
 Subsequent string forms validate the buffer.
 
 If a form is a list of strings or vectors, it is taken to be a
-key sequence and is passed to `execute-kbd-macro'.  Remaining
-forms are evaluated as-is. If the form is \(error SYMBOL ...)
-then the test fails unless an error of type SYMBOL is raised.
+key sequence and is passed to `execute-kbd-macro'.  If the form
+is \(file FILENAME CONTENTS), then the test fails unless the
+contents of FILENAME equal CONTENTS.  If the form is \(error
+SYMBOL ...) then the test fails unless an error of type SYMBOL is
+raised.  Remaining forms are evaluated as-is.
 
 \(fn [[KEY VALUE]...] FORMS...)"
   (declare (indent defun))
@@ -213,6 +215,9 @@ then the test fails unless an error of type SYMBOL is raised.
                                    ,form
                                    ',point-start ',point-end
                                    ',visual-start ',visual-end))
+                                ((eq (car-safe form) 'file)
+                                 `(evil-test-file-contents ,(cadr form)
+                                                           ,(caddr form)))
                                 ((or (stringp (car-safe form))
                                      (vectorp (car-safe form))
                                      (memq (car-safe (car-safe form))
@@ -239,8 +244,9 @@ then the test fails unless an error of type SYMBOL is raised.
                           '(("(\\(evil-test-buffer\\)\\>"
                              1 font-lock-keyword-face))))
 
-(defun evil-test-buffer-string
-  (string &optional point-start point-end visual-start visual-end)
+(defun evil-test-buffer-string (string &optional
+                                       point-start point-end
+                                       visual-start visual-end)
   "Validate the current buffer according to STRING.
 If STRING contains an occurrence of POINT-START immediately
 followed by POINT-END, that position is compared against point.
@@ -274,9 +280,10 @@ VISUAL-START and VISUAL-END default to < and >."
               (evil-test-selection selection))))
       (kill-buffer marker-buffer))))
 
-(defun evil-test-buffer-from-string
-  (string &optional state point-start point-end
-          visual visual-start visual-end)
+(defun evil-test-buffer-from-string (string &optional
+                                            state
+                                            point-start point-end
+                                            visual visual-start visual-end)
   "Create a new buffer according to STRING.
 If STRING contains an occurrence of POINT-START immediately
 followed by POINT-END, then point is moved to that position.
@@ -313,8 +320,9 @@ VISUAL is the Visual selection: it defaults to `char'."
         (when (markerp evil-test-point)
           (goto-char evil-test-point))))))
 
-(defun evil-test-marker-buffer-from-string
-  (string &optional point-start point-end visual-start visual-end)
+(defun evil-test-marker-buffer-from-string (string &optional
+                                                   point-start point-end
+                                                   visual-start visual-end)
   "Create a new marker buffer according to STRING.
 If STRING contains an occurrence of POINT-START immediately
 followed by POINT-END, that position is stored in the
@@ -375,8 +383,7 @@ VISUAL-START and VISUAL-END default to < and >."
               (setq evil-test-visual-end
                     (move-marker (make-marker) (point))))))))))
 
-(defun evil-test-text
-  (before after &optional before-predicate after-predicate)
+(defun evil-test-text (before after &optional before-predicate after-predicate)
   "Verify the text around point.
 BEFORE is the expected text before point, and AFTER is
 the text after point. BEFORE-PREDICATE is a predicate function
@@ -409,8 +416,8 @@ is executed at the end."
         (forward-char (length after))
         (should (funcall after-predicate))))))
 
-(defmacro evil-test-selection
-  (string &optional end-string before-predicate after-predicate)
+(defmacro evil-test-selection (string &optional end-string
+                                      before-predicate after-predicate)
   "Verify that the Visual selection contains STRING."
   (declare (indent defun))
   `(progn
@@ -421,8 +428,8 @@ is executed at the end."
        (goto-char (or evil-visual-end (region-end)))
        (evil-test-text (or ,end-string ,string) nil nil ,after-predicate))))
 
-(defmacro evil-test-region
-  (string &optional end-string before-predicate after-predicate)
+(defmacro evil-test-region (string &optional end-string
+                                   before-predicate after-predicate)
   "Verify that the region contains STRING."
   (declare (indent defun))
   `(progn
@@ -433,8 +440,8 @@ is executed at the end."
        (goto-char (region-end))
        (evil-test-text (or ,end-string ,string) nil nil ,after-predicate))))
 
-(defmacro evil-test-overlay
-  (overlay string &optional end-string before-predicate after-predicate)
+(defmacro evil-test-overlay (overlay string &optional end-string
+                                     before-predicate after-predicate)
   "Verify that OVERLAY contains STRING."
   (declare (indent defun))
   `(progn
@@ -444,6 +451,11 @@ is executed at the end."
      (save-excursion
        (goto-char (overlay-end ,overlay))
        (evil-test-text (or ,end-string ,string) nil nil ,after-predicate))))
+
+(defun evil-temp-filename ()
+  "Return an appropriate temporary filename."
+  (make-temp-name (expand-file-name "evil-test"
+                                    temporary-file-directory)))
 
 (defmacro evil-with-temp-file (file-var content &rest body)
   "Create a temp file with CONTENT and bind its name to FILE-VAR within BODY.
@@ -456,14 +468,20 @@ while the temporary file exists. The temporary file is deleted at
 the end of the execution of BODY."
   (declare (indent 2)
            (debug (symbolp form body)))
-  `(let ((,file-var (make-temp-name
-                     (expand-file-name "evil-test" temporary-file-directory))))
+  `(let ((,file-var (evil-temp-filename)))
      (with-temp-file ,file-var
        ,(if (stringp content)
             `(insert ,content)
           content))
      ,@body
      (delete-file ,file-var)))
+
+(defun evil-test-file-contents (name contents)
+  "Ensure that the contents of file with NAME equal CONTENTS."
+  (with-temp-buffer
+    (insert-file-contents name)
+    (should (string= (buffer-string)
+                     contents))))
 
 ;;; States
 
@@ -7081,14 +7099,15 @@ maybe we need one line more with some text\n")
 (ert-deftest evil-test-normal ()
   "Test `evil-ex-normal'."
   :tags '(evil ex)
-  (evil-test-buffer
-    "[l]ine 1\nline 2\nline 3\nline 4\nline 5\n"
-    (":normal lxIABC" [escape] "AXYZ" [return])
-    "ABClne 1XY[Z]\nline 2\nline 3\nline 4\nline 5\n"
-    (":3,4normal lxIABC" [escape] "AXYZ" [return])
-    "ABClne 1XYZ\nline 2\nABClne 3XYZ\nABClne 4XY[Z]\nline 5\n"
-    ("u")
-    "ABClne 1XYZ\nline 2\nl[i]ne 3\nline 4\nline 5\n"))
+  (let (evil-want-fine-undo)
+    (evil-test-buffer
+      "[l]ine 1\nline 2\nline 3\nline 4\nline 5\n"
+      (":normal lxIABC" [escape] "AXYZ" [return])
+      "ABClne 1XY[Z]\nline 2\nline 3\nline 4\nline 5\n"
+      (":3,4normal lxIABC" [escape] "AXYZ" [return])
+      "ABClne 1XYZ\nline 2\nABClne 3XYZ\nABClne 4XY[Z]\nline 5\n"
+      ("u")
+      "ABClne 1XYZ\nline 2\nl[i]ne 3\nline 4\nline 5\n")))
 
 (ert-deftest evil-test-copy ()
   :tags '(evil ex)
@@ -7162,6 +7181,43 @@ maybe we need one line more with some text\n")
       "line1\nline2\nline3\nli[n]e4\nline5\n"
       (":2,4move.")
       "line1\nline2\nline3\n[l]ine4\nline5\n")))
+
+(ert-deftest evil-test-write ()
+  :tags '(evil ex)
+  "Test `evil-write'."
+  (ert-info ("Write open file")
+    (evil-with-temp-file filename "line1\nline2\nline3\n"
+      (evil-test-buffer
+        ((vconcat ":e " filename [return]))
+        "[l]ine1\nline2\nline3\n"
+        ("Galine4\nline5\n" [escape])
+        "line1\nline2\nline3\nline4\nline5\n"
+        (":w")
+        (file filename "line1\nline2\nline3\nline4\nline5\n"))))
+  (let ((filename (evil-temp-filename)))
+    (ert-info ("Write current buffer to new file")
+      (evil-test-buffer
+        "[l]ine1\nline2\nline3\nline4\nline5\n"
+        ((vconcat ":w " filename [return]))
+        (file filename "line1\nline2\nline3\nline4\nline5\n")
+        (delete-file filename)))
+    (ert-info ("Write part of a buffer")
+      (evil-test-buffer
+        "[l]ine1\nline2\nline3\nline4\nline5\n"
+        ((vconcat ":2,3w " filename [return]))
+        (file filename "line2\nline3\n")
+        (delete-file filename)))
+    (ert-info ("Appending a file")
+      (evil-test-buffer
+        "[l]ine1\nline2\nline3\nline4\nline5\n"
+        ((vconcat ":4w " filename [return]))
+        (file filename "line4\n")
+        ((vconcat ":1,2w >>" filename [return]))
+        (file filename "line4\nline1\nline2\n")
+        ((vconcat ":w >> " filename [return]))
+        (file filename
+              "line4\nline1\nline2\nline1\nline2\nline3\nline4\nline5\n")
+        (delete-file filename)))))
 
 ;;; Command line window
 

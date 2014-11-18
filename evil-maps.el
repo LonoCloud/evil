@@ -136,25 +136,25 @@
 (define-key evil-window-map "|" 'evil-window-set-width)
 (define-key evil-window-map "\C-b" 'evil-window-bottom-right)
 (define-key evil-window-map "\C-c" 'evil-window-delete)
-(define-key evil-window-map "\C-H" 'evil-window-move-far-left)
+(define-key evil-window-map (kbd "C-S-h") 'evil-window-move-far-left)
 (define-key evil-window-map "\C-h" 'evil-window-left)
-(define-key evil-window-map "\C-J" 'evil-window-move-very-bottom)
+(define-key evil-window-map (kbd "C-S-j") 'evil-window-move-very-bottom)
 (define-key evil-window-map "\C-j" 'evil-window-down)
-(define-key evil-window-map "\C-K" 'evil-window-move-very-top)
+(define-key evil-window-map (kbd "C-S-k") 'evil-window-move-very-top)
 (define-key evil-window-map "\C-k" 'evil-window-up)
-(define-key evil-window-map "\C-L" 'evil-window-move-far-right)
+(define-key evil-window-map (kbd "C-S-l") 'evil-window-move-far-right)
 (define-key evil-window-map "\C-l" 'evil-window-right)
 (define-key evil-window-map "\C-n" 'evil-window-new)
 (define-key evil-window-map "\C-o" 'delete-other-windows)
 (define-key evil-window-map "\C-p" 'evil-window-mru)
 (define-key evil-window-map "\C-r" 'evil-window-rotate-downwards)
-(define-key evil-window-map "\C-R" 'evil-window-rotate-upwards)
+(define-key evil-window-map (kbd "C-S-r") 'evil-window-rotate-upwards)
 (define-key evil-window-map "\C-s" 'evil-window-split)
-(define-key evil-window-map "\C-S" 'evil-window-split)
+(define-key evil-window-map (kbd "C-S-s") 'evil-window-split)
 (define-key evil-window-map "\C-t" 'evil-window-top-left)
 (define-key evil-window-map "\C-v" 'evil-window-vsplit)
 (define-key evil-window-map "\C-w" 'evil-window-next)
-(define-key evil-window-map "\C-W" 'evil-window-prev)
+(define-key evil-window-map (kbd "C-S-W") 'evil-window-prev)
 (define-key evil-window-map "\C-_" 'evil-window-set-height)
 (define-key evil-window-map "\C-f" 'ffap-other-window)
 
@@ -358,8 +358,6 @@
 (define-key evil-insert-state-map "\C-d" 'evil-shift-left-line)
 (define-key evil-insert-state-map [remap delete-backward-char] 'evil-delete-backward-char-and-join)
 (define-key evil-insert-state-map [delete] 'delete-char)
-(define-key evil-insert-state-map [remap newline] 'evil-ret)
-(define-key evil-insert-state-map [remap newline-and-indent] 'evil-ret-and-indent)
 (define-key evil-insert-state-map [escape] 'evil-normal-state)
 (define-key evil-insert-state-map
   (read-kbd-macro evil-toggle-key) 'evil-emacs-state)
@@ -380,13 +378,6 @@
 
 (when evil-want-C-w-in-emacs-state
   (define-key evil-emacs-state-map "\C-w" 'evil-window-map))
-
-;;; Minibuffer
-
-(define-key minibuffer-local-map "\C-p" 'evil-complete-next)
-(define-key minibuffer-local-map "\C-n" 'evil-complete-previous)
-(define-key minibuffer-local-map "\C-x\C-p" 'evil-complete-next-line)
-(define-key minibuffer-local-map "\C-x\C-n" 'evil-complete-previous-line)
 
 ;;; Mouse
 (define-key evil-motion-state-map [down-mouse-1] 'evil-mouse-drag-region)
@@ -459,16 +450,21 @@
 (evil-ex-define-cmd "=" 'evil-ex-line-number)
 (evil-ex-define-cmd "!" 'evil-shell-command)
 (evil-ex-define-cmd "@:" 'evil-ex-repeat)
+(evil-ex-define-cmd "m[ake]" 'evil-make)
+(evil-ex-define-cmd "cn[ext]" 'next-error)
+(evil-ex-define-cmd "cp[revious]" 'previous-error)
 (evil-ex-define-cmd "set-initial-state" 'evil-ex-set-initial-state)
 (evil-ex-define-cmd "show-digraphs" 'evil-ex-show-digraphs)
 
 ;; search command line
 (define-key evil-ex-search-keymap "\d" #'evil-ex-delete-backward-char)
+(define-key evil-ex-search-keymap "\C-r" 'evil-paste-from-register)
 
 ;; ex command line
 (define-key evil-ex-completion-map "\d" #'evil-ex-delete-backward-char)
 (define-key evil-ex-completion-map "\t" #'evil-ex-completion)
 (define-key evil-ex-completion-map [tab] #'evil-ex-completion)
+(define-key evil-ex-completion-map [remap completion-at-point] #'evil-ex-completion)
 (define-key evil-ex-completion-map "\C-a" 'evil-ex-completion)
 (define-key evil-ex-completion-map "\C-b" 'move-beginning-of-line)
 (define-key evil-ex-completion-map "\C-c" 'abort-recursive-edit)

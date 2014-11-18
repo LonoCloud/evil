@@ -134,6 +134,7 @@ input is the visual region '<,'> or `<,`>. If the value of the
 global variable `evil-ex-initial-input' is non-nil, its content
 is appended to the line."
   :keep-visual t
+  :repeat abort
   (interactive
    (list
     (let ((s (concat
@@ -184,7 +185,7 @@ is appended to the line."
   (unless (zerop (length result))
     (if evil-ex-expression
         (eval evil-ex-expression)
-      (error "Ex: syntax error"))))
+      (user-error "Ex: syntax error"))))
 
 (defun evil-ex-delete-backward-char ()
   "Close the minibuffer if it is empty.
@@ -600,7 +601,7 @@ works accordingly."
       (if (commandp binding)
           binding
         (unless noerror
-          (error "Unknown command: `%s'" command))))))
+          (user-error "Unknown command: `%s'" command))))))
 
 (defun evil-ex-completed-binding (command &optional noerror)
   "Returns the final binding of the completion of COMMAND."
@@ -656,7 +657,7 @@ This function interprets special file names like # and %."
               (setq hist nil)
               (if evil-ex-expression
                   (eval evil-ex-expression)
-                (error "Ex: syntax error")))))))))
+                (user-error "Ex: syntax error")))))))))
 
 (defun evil-ex-call-command (range command argument)
   "Execute the given command COMMAND."
@@ -736,7 +737,7 @@ Signal an error if MARKER is in a different buffer."
   (setq marker (evil-get-marker marker))
   (if (numberp marker)
       (line-number-at-pos marker)
-    (error "Ex does not support markers in other files")))
+    (user-error "Ex does not support markers in other files")))
 
 (defun evil-ex-char-marker-range (beg end)
   (when (stringp beg) (setq beg (aref beg 0)))
@@ -749,7 +750,7 @@ Signal an error if MARKER is in a different buffer."
                    (if (evil-visual-state-p)
                        (evil-visual-type)
                      'inclusive)))
-    (error "Ex does not support markers in other files")))
+    (user-error "Ex does not support markers in other files")))
 
 (defun evil-ex-re-fwd (pattern)
   "Search forward for PATTERN.

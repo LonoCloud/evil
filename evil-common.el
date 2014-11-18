@@ -612,7 +612,7 @@ Translates it according to the input method."
                (cmd
                 (call-interactively cmd))
                (t
-                (error "No replacement character typed"))))
+                (user-error "No replacement character typed"))))
           (quit
            (when (fboundp 'evil-repeat-abort)
              (evil-repeat-abort))
@@ -720,7 +720,7 @@ recursively."
         (let ((cmd (key-binding (substring keys beg end))))
           (cond
            ((memq cmd '(undefined nil))
-            (error "No command bound to %s" (substring keys beg end)))
+            (user-error "No command bound to %s" (substring keys beg end)))
            ((arrayp cmd) ; keyboard macro, replace command with macro
             (setq keys (vconcat (substring keys 0 beg)
                                 cmd
@@ -747,7 +747,7 @@ recursively."
                              (substring keys end))))))
            (t ; append a further event
             (setq end (1+ end))))))
-      (error "Key sequence contains no complete binding"))))
+      (user-error "Key sequence contains no complete binding"))))
 
 (defmacro evil-redirect-digit-argument (map keys target)
   "Bind a wrapper function calling TARGET or `digit-argument'.
@@ -771,6 +771,17 @@ has already been started; otherwise TARGET is called."
           (t
            (setq this-command #',target)
            (call-interactively #',target)))))))
+
+(defun evil-extract-append (file-or-append)
+  "Return an (APPEND . FILENAME) pair based on FILE-OR-APPEND.
+FILE-OR-APPEND should either be a filename or a \">> FILE\"
+directive.  APPEND will be t if FILE-OR-APPEND is an append
+directive and nil otherwise.  FILENAME will be the extracted
+filename."
+  (if (and (stringp file-or-append)
+           (string-match "\\(>> *\\)" file-or-append))
+      (cons t (substring file-or-append(match-end 1)))
+    (cons nil file-or-append)))
 
 (defun evil-set-keymap-prompt (map prompt)
   "Set the prompt-string of MAP to PROMPT."
@@ -1886,7 +1897,7 @@ otherwise, it stays behind."
         (set marker (or (symbol-value marker) (make-marker)))
         (setq marker (symbol-value marker)))
        ((functionp marker)
-        (error "Cannot set special marker `%c'" char))
+        (user-error "Cannot set special marker `%c'" char))
        ((evil-global-marker-p char)
         (setq alist (default-value 'evil-markers-alist)
               marker (make-marker))
@@ -1986,10 +1997,10 @@ The following special registers are supported.
              ((eq register ?+)
               (x-get-clipboard))
              ((eq register ?%)
-              (or (buffer-file-name) (error "No file name")))
+              (or (buffer-file-name) (user-error "No file name")))
              ((= register ?#)
               (or (with-current-buffer (other-buffer) (buffer-file-name))
-                  (error "No file name")))
+                  (user-error "No file name")))
              ((eq register ?/)
               (or (car-safe
                    (or (and (boundp 'evil-search-module)
@@ -1997,10 +2008,10 @@ The following special registers are supported.
                             evil-ex-search-history)
                        (and isearch-regexp regexp-search-ring)
                        search-ring))
-                  (error "No previous regular expression")))
+                  (user-error "No previous regular expression")))
              ((eq register ?:)
               (or (car-safe evil-ex-history)
-                  (error "No previous command line")))
+                  (user-error "No previous command line")))
              ((eq register ?.)
               evil-last-insertion)
              ((eq register ?-)
@@ -2015,13 +2026,13 @@ The following special registers are supported.
                   (prin1-to-string result))
                  ((sequencep result)
                   (mapconcat #'prin1-to-string result "\n"))
-                 (t (error "Using %s as a string" (type-of result))))))
+                 (t (user-error "Using %s as a string" (type-of result))))))
              ((eq register ?_) ; the black hole register
               "")
              (t
               (setq register (downcase register))
               (get-register register)))
-            (error "Register `%c' is empty" register)))
+            (user-error "Register `%c' is empty" register)))
     (error (unless err (signal (car err) (cdr err))))))
 
 (defun evil-set-register (register text)
@@ -2544,9 +2555,9 @@ is negative this is a more recent kill."
                 '(evil-paste-after
                   evil-paste-before
                   evil-visual-paste))
-    (error "Previous command was not an evil-paste: %s" last-command))
+    (user-error "Previous command was not an evil-paste: %s" last-command))
   (unless evil-last-paste
-    (error "Previous paste command used a register"))
+    (user-error "Previous paste command used a register"))
   (evil-undo-pop)
   (goto-char (nth 2 evil-last-paste))
   (setq this-command (nth 0 evil-last-paste))
@@ -2630,8 +2641,8 @@ list of command properties as passed to `evil-define-command'."
           (setq pos (1+ pos))
         (setq match (evil-match-interactive-code string pos))
         (if (null match)
-            (error "Unknown interactive code: `%s'"
-                   (substring string pos))
+            (user-error "Unknown interactive code: `%s'"
+                        (substring string pos))
           (setq code (car match)
                 expr (car (cdr match))
                 plist (cdr (cdr match))
@@ -2728,8 +2739,7 @@ Returns a list (BEG END TYPE PROPERTIES ...), where the tail
 may contain a property list."
   (apply #'evil-transform :normalize beg end type properties))
 
-(defun evil-transform
-  (transform beg end type &rest properties)
+(defun evil-transform (transform beg end type &rest properties)
   "Apply TRANSFORM on BEG and END with PROPERTIES.
 Returns a list (BEG END TYPE PROPERTIES ...), where the tail
 may contain a property list. If TRANSFORM is undefined,
@@ -3263,27 +3273,37 @@ are included. The step is terminated with `evil-end-undo-step'."
         (undo-boundary))
       (setq evil-undo-list-pointer (or buffer-undo-list t)))))
 
-(defun evil-end-undo-step (&optional continue)
+(defun evil-end-undo-step (&optional continue first-only)
   "End a undo step started with `evil-start-undo-step'.
-Adds an undo boundary unless CONTINUE is specified."
+Adds an undo boundary unless CONTINUE is specified. If FIRST-ONLY
+is non-nil, only the first boundary is removed."
   (when (and evil-undo-list-pointer
              (not evil-in-single-undo))
-    (evil-refresh-undo-step)
+    (evil-refresh-undo-step first-only)
     (unless continue
       (undo-boundary))
-    (remove-hook 'post-command-hook #'evil-refresh-undo-step t)
     (setq evil-undo-list-pointer nil)))
 
-(defun evil-refresh-undo-step ()
+(defun evil-refresh-undo-step (&optional first-only)
   "Refresh `buffer-undo-list' entries for current undo step.
-Undo boundaries until `evil-undo-list-pointer' are removed
-to make the entries undoable as a single action.
-See `evil-start-undo-step'."
+Undo boundaries until `evil-undo-list-pointer' are removed to
+make the entries undoable as a single action. If FIRST-ONLY is
+non-nil only the first boundary is removed.  See
+`evil-start-undo-step'."
   (when evil-undo-list-pointer
-    (setq buffer-undo-list
-          (evil-filter-list #'null buffer-undo-list
-                            evil-undo-list-pointer)
-          evil-undo-list-pointer (or buffer-undo-list t))))
+    (if first-only
+        (let ((bnd buffer-undo-list)
+              (cur buffer-undo-list))
+          (while (and cur (not (eq cur evil-undo-list-pointer)))
+            (when (null (cadr cur))
+              (setq bnd cur))
+            (pop cur))
+          ;; found the first boundary, remove it
+          (when (and bnd (null (cadr bnd)))
+            (setcdr bnd (cdr (cdr bnd)))))
+      (setq buffer-undo-list
+            (evil-filter-list #'null buffer-undo-list evil-undo-list-pointer)))
+    (setq evil-undo-list-pointer (or buffer-undo-list t))))
 
 (defmacro evil-with-undo (&rest body)
   "Execute BODY with enabled undo.
@@ -3332,7 +3352,7 @@ in `evil-temporary-undo' instead."
                          evil-temporary-undo
                        buffer-undo-list)))
       (when (or (not undo-list) (car undo-list))
-        (error "Can't undo previous change"))
+        (user-error "Can't undo previous change"))
       (while (and undo-list (null (car undo-list)))
         (pop undo-list)) ; remove nil
       (while (and undo-list (car undo-list))
@@ -3562,9 +3582,9 @@ REST is the unparsed remainder of TO."
                ((eq char ?=)
                 (when (or (zerop (length rest))
                           (not (eq (aref rest 0) ?@)))
-                  (error "Expected @ after \\="))
+                  (user-error "Expected @ after \\="))
                 (when (< (length rest) 2)
-                  (error "Expected register after \\=@"))
+                  (user-error "Expected register after \\=@"))
                 (list (evil-get-register (aref rest 1))
                       (substring rest 2)))
                ((eq char ?,)
@@ -3582,6 +3602,8 @@ REST is the unparsed remainder of TO."
                             (1+ (cdr obj))
                           (cdr obj))))
                   (list result (substring rest end))))
+               ((eq char ?0)
+                (list "\\&" rest))
                (t
                 (list (concat "\\" (char-to-string char)) rest))))
           start)))
