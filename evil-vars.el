@@ -27,6 +27,9 @@
 
 ;;; Code:
 
+(declare-function evil-add-command-properties "evil-common"
+                  (command &rest properties))
+
 ;;; Hooks
 
 (defvar evil-after-load-hook nil
@@ -424,6 +427,17 @@ before point."
   "Whether \"cw\" behaves like \"ce\"."
   :type 'boolean
   :group 'evil)
+
+(defcustom evil-want-Y-yank-to-eol nil
+  "Whether \"Y\" yanks to the end of the line.
+The default behavior is to yank the whole line."
+  :group 'evil
+  :type 'boolean
+  :initialize #'evil-custom-initialize-pending-reset
+  :set #'(lambda (sym value)
+           (evil-add-command-properties
+            'evil-yank-line
+            :motion (if value 'evil-end-of-line 'evil-line))))
 
 (defcustom evil-echo-state t
   "Whether to signal the current state in the echo area."
@@ -1007,6 +1021,11 @@ uses plain Emacs regular expressions."
                 (const :tag "Disable highlighting." nil))
   :group 'evil)
 
+(defcustom evil-ex-search-persistent-highlight t
+  "If non-nil matches remained highlighted when the search ends."
+  :type 'boolean
+  :group 'evil)
+
 (defcustom evil-ex-search-case 'smart
   "The case behaviour of the search command.
 Smart case means that the pattern is case sensitive if and only
@@ -1492,7 +1511,8 @@ Elements have the form (NAME . FUNCTION).")
      :close      hide-ifdef-block)
     ((outline-mode
       outline-minor-mode
-      org-mode)
+      org-mode
+      markdown-mode)
      :open-all   show-all
      :close-all  ,(lambda ()
                     (with-no-warnings (hide-sublevels 1)))
